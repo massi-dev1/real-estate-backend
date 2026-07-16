@@ -1,7 +1,7 @@
 """Celery application (§12): one broker, four queues by workload profile.
 
-``default`` carries emails/notifications, ``media`` is reserved for the
-CPU-heavy image pipeline (a later part), ``sync`` for portal/geocoding work,
+``default`` carries emails/notifications, ``media`` runs the CPU-heavy image
+pipeline (§8.2), ``sync`` for portal/geocoding work,
 ``analytics`` for rollups — a slow queue can never starve lead notifications
 sitting in ``default``. Beat drives scheduled jobs from this same app.
 """
@@ -27,6 +27,7 @@ celery_app.conf.update(
     task_routes={
         "app.workers.tasks.email.*": {"queue": "default"},
         "app.workers.tasks.listings.*": {"queue": "analytics"},
+        "app.workers.tasks.media.*": {"queue": "media"},
     },
     task_serializer="json",
     accept_content=["json"],

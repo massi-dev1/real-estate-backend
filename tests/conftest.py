@@ -16,6 +16,12 @@ os.environ["DATABASE_DDL_URL"] = (
 os.environ["REDIS_URL"] = "redis://localhost:6379/1"
 os.environ["CELERY_BROKER_URL"] = "redis://localhost:6379/1"
 os.environ["CELERY_RESULT_BACKEND"] = "redis://localhost:6379/1"
+# Dedicated MinIO buckets (created by the compose minio-init one-shot), so
+# test objects never mix with dev data.
+os.environ["STORAGE_ACCESS_KEY"] = "minio"
+os.environ["STORAGE_SECRET_KEY"] = "minio12345"
+os.environ["STORAGE_MEDIA_BUCKET"] = "media-test"
+os.environ["STORAGE_DOCS_BUCKET"] = "media-private-test"
 
 import subprocess
 import sys

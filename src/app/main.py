@@ -13,11 +13,13 @@ from app.core.database import create_engine, create_session_factory
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from app.core.storage import create_storage
 from app.core.tenancy import TenantResolutionMiddleware
 from app.health import router as health_router
 from app.modules.auth.router import auth_router, platform_auth_router
 from app.modules.listings.router import portal_router as listings_portal_router
 from app.modules.listings.router import public_router as listings_public_router
+from app.modules.media.router import router as media_portal_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
@@ -32,6 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.engine = create_engine(settings)
     app.state.session_factory = create_session_factory(app.state.engine)
+    app.state.storage = create_storage(settings)
     app.state.tenant_resolver = DomainTenantResolver(
         session_factory=app.state.session_factory,
         redis=app.state.redis,
@@ -55,6 +58,7 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(staff_router)
     router.include_router(listings_public_router)
     router.include_router(listings_portal_router)
+    router.include_router(media_portal_router)
     return router
 
 

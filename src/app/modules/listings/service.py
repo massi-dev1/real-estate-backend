@@ -191,9 +191,16 @@ class ListingService:
         return listing
 
     async def get_portal(
-        self, tenant: TenantContext, actor: AuthenticatedUser, listing_id: uuid.UUID
+        self,
+        tenant: TenantContext,
+        actor: AuthenticatedUser,
+        listing_id: uuid.UUID,
+        *,
+        for_update: bool = False,
     ) -> Listing:
-        return await self._get_scoped_or_404(tenant.id, actor, listing_id)
+        """``for_update`` lets dependent modules (media quota checks) serialize
+        their read-validate-write flows on the listing row."""
+        return await self._get_scoped_or_404(tenant.id, actor, listing_id, for_update=for_update)
 
     async def list_portal(
         self,

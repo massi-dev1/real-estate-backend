@@ -27,6 +27,8 @@ from app.modules.listings.schemas import (
     TransitionRequest,
 )
 from app.modules.listings.service import ListingServiceDep
+from app.modules.media.schemas import MediaKind, PublicMediaOut
+from app.modules.media.service import MediaServiceDep
 
 public_router = APIRouter(prefix="/listings", tags=["listings:public"])
 
@@ -35,6 +37,7 @@ public_router = APIRouter(prefix="/listings", tags=["listings:public"])
 async def list_published_listings(
     tenant: TenantDep,
     service: ListingServiceDep,
+    media_service: MediaServiceDep,
     query: Annotated[PublicListingQuery, Query()],
     accept_language: str | None = Header(default=None),
 ) -> Page[PublicListingOut]:
@@ -42,8 +45,20 @@ async def list_published_listings(
     items, next_cursor = await service.list_public(
         tenant, filters=query, cursor=query.cursor, limit=query.limit
     )
+    covers = await media_service.covers_for(tenant, [x.id for x in items])
     return Page(
-        items=[PublicListingOut.from_listing(x, resolved) for x in items],
+        items=[
+            PublicListingOut.from_listing(
+                x,
+                resolved,
+                cover=(
+                    PublicMediaOut.from_media(covers[x.id], resolved, media_service.public_url)
+                    if x.id in covers
+                    else None
+                ),
+            )
+            for x in items
+        ],
         next_cursor=next_cursor,
     )
 
@@ -53,12 +68,16 @@ async def get_published_listing(
     ref_or_id: str,
     tenant: TenantDep,
     service: ListingServiceDep,
+    media_service: MediaServiceDep,
     locale: str | None = Query(default=None),
     accept_language: str | None = Header(default=None),
 ) -> PublicListingOut:
     resolved = negotiate_locale(locale, accept_language)
     listing = await service.get_public(tenant, ref_or_id)
-    return PublicListingOut.from_listing(listing, resolved)
+    rows = await media_service.public_for_listing(tenant, listing.id)
+    media = [PublicMediaOut.from_media(m, resolved, media_service.public_url) for m in rows]
+    cover = next((m for m in media if m.kind is MediaKind.PHOTO), None)
+    return PublicListingOut.from_listing(listing, resolved, cover=cover, media=media)
 
 
 portal_router = APIRouter(prefix="/portal/listings", tags=["listings:portal"])

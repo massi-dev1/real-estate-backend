@@ -23,6 +23,7 @@ from app.modules.listings.models import (
     PricePeriod,
     PropertyType,
 )
+from app.modules.media.schemas import PublicMediaOut
 
 # Controlled vocabulary (§8.1): filters stay consistent and the GIN index
 # stays useful. Grows deliberately, never via free-text input.
@@ -333,9 +334,20 @@ class PublicListingOut(OutSchema):
     address: dict[str, Any]
     location: PointOut | None
     published_at: datetime | None
+    # Cover photo everywhere; the full gallery only on the detail endpoint
+    # (`null` on list responses — the page never needs 50 photos per card).
+    cover: PublicMediaOut | None = None
+    media: list[PublicMediaOut] | None = None
 
     @classmethod
-    def from_listing(cls, listing: Listing, locale: str) -> "PublicListingOut":
+    def from_listing(
+        cls,
+        listing: Listing,
+        locale: str,
+        *,
+        cover: PublicMediaOut | None = None,
+        media: list[PublicMediaOut] | None = None,
+    ) -> "PublicListingOut":
         lonlat = point_lonlat(listing.location)
         return cls(
             id=listing.id,
@@ -360,6 +372,8 @@ class PublicListingOut(OutSchema):
             address=listing.address,
             location=PointOut(lat=lonlat[1], lng=lonlat[0]) if lonlat else None,
             published_at=listing.published_at,
+            cover=cover,
+            media=media,
         )
 
 

@@ -46,6 +46,25 @@ class Settings(BaseSettings):
     # A published listing past this age is flagged stale for agent review (§8.1).
     listing_stale_after_days: int = 90
 
+    # Object storage (§8.2): S3-compatible, MinIO locally. Two buckets —
+    # `media` holds processed public variants (served via CDN in prod),
+    # `docs` holds originals + private documents (presigned access only).
+    storage_endpoint_url: str = "http://localhost:9000"
+    # No defaults on purpose (same fail-fast rule as APP_SECRET_KEY): a prod
+    # deploy missing these must not silently sign URLs with dev credentials.
+    storage_access_key: str
+    storage_secret_key: str
+    storage_region: str = "us-east-1"
+    storage_media_bucket: str = "media"
+    storage_docs_bucket: str = "media-private"
+    # CDN base for public variant URLs; empty = serve from the endpoint itself.
+    media_public_base_url: str = ""
+    media_upload_url_ttl_seconds: int = 900
+    media_download_url_ttl_seconds: int = 900  # §8.2: presigned GET, 15 min
+    media_max_upload_bytes: int = 25 * 1024 * 1024
+    # Default photo quota per listing; tenants override via settings.media.*.
+    media_max_photos_per_listing: int = 50
+
     cors_origins: str = ""
 
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".

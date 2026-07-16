@@ -20,6 +20,9 @@ dependencies = [
     "uuid-utils>=0.10",
     "aiosmtplib>=5.1.2",
     "celery[redis]>=5.4",
+    "boto3>=1.43.49",
+    "pyvips[binary]>=3.1.1",
+    "blurhash>=1.1.5",
 ]
 
 [dependency-groups]
@@ -29,6 +32,7 @@ dev = [
     "ruff>=0.9",
     "mypy>=1.14",
     "asgi-lifespan>=2.1",
+    "boto3-stubs[s3]>=1.43.49",
 ]
 
 [build-system]
@@ -68,7 +72,7 @@ packages = ["app"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["geoalchemy2.*", "asyncpg.*", "celery.*"]
+module = ["geoalchemy2.*", "asyncpg.*", "celery.*", "pyvips.*", "blurhash.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
