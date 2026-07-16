@@ -17,6 +17,8 @@ from app.core.tenancy import TenantResolutionMiddleware
 from app.health import router as health_router
 from app.integrations.email.service import SmtpEmailService
 from app.modules.auth.router import auth_router, platform_auth_router
+from app.modules.listings.router import portal_router as listings_portal_router
+from app.modules.listings.router import public_router as listings_public_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
@@ -53,6 +55,8 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(platform_auth_router)
     router.include_router(users_router)
     router.include_router(staff_router)
+    router.include_router(listings_public_router)
+    router.include_router(listings_portal_router)
     return router
 
 

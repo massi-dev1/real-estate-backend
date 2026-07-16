@@ -43,6 +43,9 @@ class Base(DeclarativeBase):
         datetime: TIMESTAMP(timezone=True),
         dict[str, Any]: JSONB,
     }
+    # Async sessions cannot lazy-refresh expired attributes; fetch
+    # server-generated values (updated_at's onupdate) via RETURNING at flush.
+    __mapper_args__ = {"eager_defaults": True}  # noqa: RUF012
 
 
 class UUIDPrimaryKeyMixin:

@@ -45,6 +45,8 @@ class Permission(enum.StrEnum):
     # Tenant back-office.
     USER_VIEW = "user:view"
     USER_MANAGE = "user:manage"
+    LISTING_MANAGE = "listing:manage"  # create/edit within the actor's scope
+    LISTING_PUBLISH = "listing:publish"  # move listings into `published`
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -54,10 +56,19 @@ class Permission(enum.StrEnum):
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.BUYER_RENTER: frozenset(),
     Role.SELLER: frozenset(),
-    Role.AGENT: frozenset(),
-    Role.TEAM_LEAD: frozenset(),
-    Role.MARKETING: frozenset(),
-    Role.ADMIN: frozenset({Permission.USER_VIEW, Permission.USER_MANAGE}),
+    # Agents manage their own listings; publish rights come from the tenant's
+    # `listings.agent_self_publish` setting, checked in the listings service.
+    Role.AGENT: frozenset({Permission.LISTING_MANAGE}),
+    Role.TEAM_LEAD: frozenset({Permission.LISTING_MANAGE, Permission.LISTING_PUBLISH}),
+    Role.MARKETING: frozenset({Permission.LISTING_MANAGE}),
+    Role.ADMIN: frozenset(
+        {
+            Permission.USER_VIEW,
+            Permission.USER_MANAGE,
+            Permission.LISTING_MANAGE,
+            Permission.LISTING_PUBLISH,
+        }
+    ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),
     Role.PLATFORM_ADMIN: frozenset(
         {
