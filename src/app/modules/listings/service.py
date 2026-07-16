@@ -9,10 +9,12 @@ needs ``LISTING_PUBLISH`` — or, for agents, the tenant's
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Annotated, Any
 
 import structlog
 from fastapi import Depends
+from sqlalchemy import Row
 
 from app.core.database import SessionDep
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
@@ -25,16 +27,25 @@ from app.modules.listings.models import (
     ListingStatus,
     ListingStatusHistory,
 )
-from app.modules.listings.repository import ListingRepository
+from app.modules.listings.repository import ListingRepository, PublicKeyset
 from app.modules.listings.schemas import (
     PURPOSE_PRICE_PERIOD,
     ListingCreate,
     ListingUpdate,
     PublicListingFilters,
+    SearchSort,
 )
 from app.modules.users.service import UserService, get_user_service
 
 logger = structlog.get_logger(__name__)
+
+# Above this many hits in a map viewport, pins collapse into geohash-bucket
+# clusters (§8.3) — the payload stays bounded no matter the zoom level.
+MAP_PIN_LIMIT = 500
+
+# One sitemap file caps at 50k URLs (sitemaps.org); a sitemap index arrives
+# with the content part if any tenant outgrows this.
+SITEMAP_MAX_URLS = 50_000
 
 # Roles whose LISTING_MANAGE covers the whole tenant, not just their own rows.
 MANAGES_ALL_ROLES = frozenset({Role.ADMIN, Role.TEAM_LEAD, Role.MARKETING})
@@ -163,6 +174,10 @@ class ListingService:
     ) -> Listing:
         listing = await self._get_scoped_or_404(tenant.id, actor, listing_id)
         patch = data.model_dump(exclude_unset=True)
+        if "featured" in patch and actor.role not in MANAGES_ALL_ROLES:
+            # Paid placement (§8.3) is an agency-level decision, not an
+            # agent's self-service toggle.
+            raise PermissionDeniedError("Only managers can feature a listing.")
         if "agent_id" in patch:
             if data.agent_id is None:
                 # Explicit null = unassign — must not fall into _resolve_agent's
@@ -338,23 +353,85 @@ class ListingService:
         tenant: TenantContext,
         *,
         filters: PublicListingFilters,
+        locale: str,
+        sort: SearchSort,
         cursor: str | None,
         limit: int | None,
     ) -> tuple[list[Listing], str | None]:
         page_size = clamp_limit(limit)
-        after = _decode_keyset(cursor, "published_at") if cursor else None
+        after = _decode_public_cursor(cursor, sort) if cursor else None
         rows = await self.repo.list_published(
-            tenant.id, filters=filters, after=after, limit=page_size
+            tenant.id, filters=filters, locale=locale, sort=sort, after=after, limit=page_size
         )
         items = rows[:page_size]
-        next_cursor = None
-        if len(rows) > page_size:
-            last = items[-1]
-            assert last.published_at is not None  # published rows always carry it
-            next_cursor = encode_cursor(
-                {"published_at": last.published_at.isoformat(), "id": str(last.id)}
-            )
+        next_cursor = _encode_public_cursor(items[-1], sort) if len(rows) > page_size else None
         return items, next_cursor
+
+    async def map_points(
+        self, tenant: TenantContext, *, filters: PublicListingFilters, locale: str
+    ) -> tuple[list[Row[Any]], list[Row[Any]], bool]:
+        """(pins, clusters, clustered) — pins up to ``MAP_PIN_LIMIT`` hits in
+        the viewport, geohash clusters beyond it (§8.3)."""
+        total = await self.repo.count_mappable(tenant.id, filters=filters, locale=locale)
+        if total <= MAP_PIN_LIMIT:
+            pins = await self.repo.map_pins(
+                tenant.id, filters=filters, locale=locale, limit=MAP_PIN_LIMIT
+            )
+            return pins, [], False
+        clusters = await self.repo.map_clusters(
+            tenant.id, filters=filters, locale=locale, precision=_cluster_precision(filters.bbox)
+        )
+        return [], clusters, True
+
+    async def sitemap_entries(self, tenant: TenantContext) -> list[Row[Any]]:
+        """(reference_code, updated_at) of every published listing."""
+        return await self.repo.sitemap_rows(tenant.id, limit=SITEMAP_MAX_URLS)
+
+
+def _cluster_precision(bbox: tuple[float, float, float, float] | None) -> int:
+    """Geohash precision matched to the viewport: wider view → coarser
+    buckets. Without a viewport, city-scale buckets (~20 km)."""
+    if bbox is None:
+        return 4
+    span = max(bbox[2] - bbox[0], bbox[3] - bbox[1])
+    if span >= 20:
+        return 2
+    if span >= 5:
+        return 3
+    if span >= 1:
+        return 4
+    if span >= 0.2:
+        return 5
+    return 6
+
+
+def _encode_public_cursor(last: Listing, sort: SearchSort) -> str:
+    if sort is SearchSort.NEWEST:
+        assert last.published_at is not None  # published rows always carry it
+        key = last.published_at.isoformat()
+    elif sort in (SearchSort.PRICE_ASC, SearchSort.PRICE_DESC):
+        key = str(last.price)
+    else:
+        key = str(last.area_built or 0)  # matches the coalesce(area_built, 0) key
+    return encode_cursor(
+        {"sort": sort.value, "featured": last.featured, "key": key, "id": str(last.id)}
+    )
+
+
+def _decode_public_cursor(cursor: str, sort: SearchSort) -> PublicKeyset:
+    values = decode_cursor(cursor)
+    try:
+        if values["sort"] != sort.value:
+            # A cursor only orders the sort it was minted under.
+            raise InvalidCursorError("The cursor does not match the requested sort.")
+        key: Any = (
+            datetime.fromisoformat(values["key"])
+            if sort is SearchSort.NEWEST
+            else Decimal(values["key"])
+        )
+        return bool(values["featured"]), key, uuid.UUID(values["id"])
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise InvalidCursorError("The provided cursor is malformed.") from exc
 
 
 def _decode_keyset(cursor: str, ts_field: str) -> tuple[datetime, uuid.UUID]:

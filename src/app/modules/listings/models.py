@@ -1,8 +1,7 @@
 """Listings — the core inventory (§6.3). All tables are tenant-owned and
 RLS-protected; every query additionally filters ``tenant_id`` explicitly.
 
-Deferred by design: ``search_vector`` + FTS (search part), ``neighborhood_id``
-(content part), media tables (media part), geocoding (Celery part) — the API
+Deferred by design: ``neighborhood_id`` (content part), geocoding — the API
 accepts explicit coordinates until then.
 """
 
@@ -14,6 +13,7 @@ from typing import Any
 
 from geoalchemy2 import Geometry, WKBElement, WKTElement
 from sqlalchemy import (
+    Computed,
     Enum,
     ForeignKey,
     Integer,
@@ -23,7 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -130,6 +130,25 @@ class Listing(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # stale; cleared whenever the listing is edited or moved off `published`.
     stale_flagged_at: Mapped[datetime | None]
     view_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # Paid-placement boost (§8.3): leads every public sort. Manager-set only.
+    featured: Mapped[bool] = mapped_column(default=False, server_default=text("false"))
+    # STORED generated column (migration 0006): all locales in one vector,
+    # each through its own text-search config, title A > description B >
+    # city C. Deferred — queried with @@, never loaded onto the object.
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('french', coalesce(title ->> 'fr', '')), 'A') || "
+            "setweight(to_tsvector('english', coalesce(title ->> 'en', '')), 'A') || "
+            "setweight(to_tsvector('arabic', coalesce(title ->> 'ar', '')), 'A') || "
+            "setweight(to_tsvector('french', coalesce(description ->> 'fr', '')), 'B') || "
+            "setweight(to_tsvector('english', coalesce(description ->> 'en', '')), 'B') || "
+            "setweight(to_tsvector('arabic', coalesce(description ->> 'ar', '')), 'B') || "
+            "setweight(to_tsvector('simple', coalesce(address ->> 'city', '')), 'C')",
+            persisted=True,
+        ),
+        deferred=True,
+    )
 
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")

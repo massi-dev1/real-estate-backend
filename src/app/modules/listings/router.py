@@ -9,8 +9,9 @@
 
 import uuid
 from typing import Annotated
+from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 
 from app.core.i18n import negotiate_locale
 from app.core.pagination import MAX_PAGE_SIZE, Page
@@ -21,10 +22,15 @@ from app.modules.listings.schemas import (
     ListingCreate,
     ListingOut,
     ListingUpdate,
+    MapClusterOut,
+    MapOut,
+    MapPinOut,
+    MapQuery,
     PublicListingOut,
     PublicListingQuery,
     StatusHistoryOut,
     TransitionRequest,
+    build_json_ld,
 )
 from app.modules.listings.service import ListingServiceDep
 from app.modules.media.schemas import MediaKind, PublicMediaOut
@@ -43,7 +49,12 @@ async def list_published_listings(
 ) -> Page[PublicListingOut]:
     resolved = negotiate_locale(query.locale, accept_language)
     items, next_cursor = await service.list_public(
-        tenant, filters=query, cursor=query.cursor, limit=query.limit
+        tenant,
+        filters=query,
+        locale=resolved,
+        sort=query.sort,
+        cursor=query.cursor,
+        limit=query.limit,
     )
     covers = await media_service.covers_for(tenant, [x.id for x in items])
     return Page(
@@ -63,6 +74,44 @@ async def list_published_listings(
     )
 
 
+# Declared before /{ref_or_id} — route matching is in declaration order.
+@public_router.get("/map")
+async def map_published_listings(
+    tenant: TenantDep,
+    service: ListingServiceDep,
+    query: Annotated[MapQuery, Query()],
+    accept_language: str | None = Header(default=None),
+) -> MapOut:
+    resolved = negotiate_locale(query.locale, accept_language)
+    pins, clusters, clustered = await service.map_points(tenant, filters=query, locale=resolved)
+    return MapOut(
+        clustered=clustered,
+        pins=[
+            MapPinOut(id=r.id, lat=r.lat, lng=r.lng, price=r.price, status=r.status)
+            for r in pins
+        ],
+        clusters=[
+            MapClusterOut(lat=float(r.lat), lng=float(r.lng), count=r.count) for r in clusters
+        ],
+    )
+
+
+def _jsonld_images(media: list[PublicMediaOut]) -> list[str]:
+    """Largest available variant URL per photo, for the structured data."""
+    urls: list[str] = []
+    for item in media:
+        if item.kind is not MediaKind.PHOTO:
+            continue
+        variant = (
+            item.variants.get("full")
+            or item.variants.get("gallery")
+            or next(iter(item.variants.values()), None)
+        )
+        if variant is not None:
+            urls.append(variant.url)
+    return urls
+
+
 @public_router.get("/{ref_or_id}")
 async def get_published_listing(
     ref_or_id: str,
@@ -77,7 +126,37 @@ async def get_published_listing(
     rows = await media_service.public_for_listing(tenant, listing.id)
     media = [PublicMediaOut.from_media(m, resolved, media_service.public_url) for m in rows]
     cover = next((m for m in media if m.kind is MediaKind.PHOTO), None)
-    return PublicListingOut.from_listing(listing, resolved, cover=cover, media=media)
+    return PublicListingOut.from_listing(
+        listing,
+        resolved,
+        cover=cover,
+        media=media,
+        json_ld=build_json_ld(listing, resolved, images=_jsonld_images(media)),
+    )
+
+
+seo_router = APIRouter(tags=["seo"])
+
+
+@seo_router.get("/sitemap.xml")
+async def sitemap(
+    request: Request, tenant: TenantDep, service: ListingServiceDep
+) -> Response:
+    """Per-tenant sitemap (§8.3): every published listing, on the domain the
+    request arrived on. Pages and posts join when the content part lands."""
+    rows = await service.sitemap_entries(tenant)
+    host = request.headers.get("host", "").split(":")[0]
+    urls = "".join(
+        f"<url><loc>https://{host}/listings/{escape(row.reference_code)}</loc>"
+        f"<lastmod>{row.updated_at.date().isoformat()}</lastmod></url>"
+        for row in rows
+    )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        f"{urls}</urlset>"
+    )
+    return Response(content=xml, media_type="application/xml")
 
 
 portal_router = APIRouter(prefix="/portal/listings", tags=["listings:portal"])

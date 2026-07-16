@@ -19,6 +19,7 @@ from app.health import router as health_router
 from app.modules.auth.router import auth_router, platform_auth_router
 from app.modules.listings.router import portal_router as listings_portal_router
 from app.modules.listings.router import public_router as listings_public_router
+from app.modules.listings.router import seo_router as listings_seo_router
 from app.modules.media.router import router as media_portal_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
@@ -58,6 +59,7 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(staff_router)
     router.include_router(listings_public_router)
     router.include_router(listings_portal_router)
+    router.include_router(listings_seo_router)
     router.include_router(media_portal_router)
     return router
 

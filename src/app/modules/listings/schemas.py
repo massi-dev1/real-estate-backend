@@ -5,12 +5,13 @@ site gets one negotiated locale per field (``title``/``description`` resolved
 through the fallback chain).
 """
 
+import enum
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, PrivateAttr, field_validator, model_validator
 
 from app.core.i18n import SUPPORTED_LOCALES, pick_localized
 from app.core.pagination import MAX_PAGE_SIZE
@@ -163,7 +164,16 @@ class ListingCreate(InputSchema):
 # PATCH fields whose column is NOT NULL — an explicit ``null`` cannot mean
 # "clear it", so it is rejected instead of dying at the DB.
 _NON_NULLABLE_UPDATE_FIELDS = frozenset(
-    {"property_type", "title", "description", "price", "currency", "negotiable", "features"}
+    {
+        "property_type",
+        "title",
+        "description",
+        "price",
+        "currency",
+        "negotiable",
+        "features",
+        "featured",
+    }
 )
 
 
@@ -192,6 +202,8 @@ class ListingUpdate(InputSchema):
     location: PointIn | None = None
     agent_id: uuid.UUID | None = None
     expires_at: datetime | None = None
+    # Paid placement (§8.3) — the service restricts this to manager roles.
+    featured: bool | None = None
 
     @field_validator("title")
     @classmethod
@@ -229,8 +241,44 @@ class TransitionRequest(InputSchema):
     to_status: ListingStatus
 
 
+class SearchSort(enum.StrEnum):
+    """Public sort options (§8.3). Featured listings lead every sort."""
+
+    NEWEST = "newest"
+    PRICE_ASC = "price_asc"
+    PRICE_DESC = "price_desc"
+    AREA_ASC = "area_asc"
+    AREA_DESC = "area_desc"
+
+
+DEFAULT_NEAR_RADIUS_KM = 5.0
+MAX_POLYGON_POINTS = 100
+
+
+def _parse_floats(raw: str, expected: int, name: str) -> tuple[float, ...]:
+    parts = [p.strip() for p in raw.split(",")]
+    try:
+        values = tuple(float(p) for p in parts)
+    except ValueError:
+        raise ValueError(f"{name} must be {expected} comma-separated numbers") from None
+    if len(values) != expected:
+        raise ValueError(f"{name} must be {expected} comma-separated numbers")
+    return values
+
+
+def _check_lonlat(lon: float, lat: float, name: str) -> None:
+    if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+        raise ValueError(f"{name} coordinates out of range (lon then lat)")
+
+
 class PublicListingFilters(BaseSchema):
-    """Search filters of the public ``GET /listings`` (full search is §8.3)."""
+    """Full public search surface (§8.3): attribute filters, keyword, geo.
+
+    Geo params arrive as compact strings (map URLs stay shareable):
+    ``inBbox=minLon,minLat,maxLon,maxLat`` · ``near=lon,lat&radiusKm=5`` ·
+    ``inPolygon=lon lat,lon lat,...``. At most one geo mode per request;
+    parsed forms are exposed as properties, never re-parsed downstream.
+    """
 
     purpose: ListingPurpose | None = None
     property_type: PropertyType | None = None
@@ -238,6 +286,31 @@ class PublicListingFilters(BaseSchema):
     price_max: PriceField | None = None
     beds_min: SmallCount | None = None
     baths_min: SmallCount | None = None
+    area_min: AreaField | None = None
+    city: str | None = Field(default=None, max_length=100)
+    features: list[str] = Field(default_factory=list, max_length=len(LISTING_FEATURES))
+    q: str | None = Field(default=None, max_length=200)
+    in_bbox: str | None = Field(default=None, max_length=120)
+    near: str | None = Field(default=None, max_length=60)
+    radius_km: float | None = Field(default=None, gt=0, le=100)
+    in_polygon: str | None = Field(default=None, max_length=4000)
+
+    _bbox: tuple[float, float, float, float] | None = PrivateAttr(default=None)
+    _near_point: tuple[float, float] | None = PrivateAttr(default=None)
+    _polygon_wkt: str | None = PrivateAttr(default=None)
+
+    @field_validator("q", "city")
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        return (value or "").strip() or None
+
+    @field_validator("features")
+    @classmethod
+    def known_features(cls, value: list[str]) -> list[str]:
+        unknown = set(value) - LISTING_FEATURES
+        if unknown:
+            raise ValueError(f"unknown features: {sorted(unknown)}")
+        return sorted(set(value))
 
     @model_validator(mode="after")
     def sane_price_range(self) -> Self:
@@ -249,17 +322,107 @@ class PublicListingFilters(BaseSchema):
             raise ValueError("priceMin cannot exceed priceMax")
         return self
 
+    @model_validator(mode="after")
+    def parse_geo(self) -> Self:
+        modes = [m for m in (self.in_bbox, self.near, self.in_polygon) if m is not None]
+        if len(modes) > 1:
+            raise ValueError("use only one of inBbox, near, inPolygon")
+        if self.radius_km is not None and self.near is None:
+            raise ValueError("radiusKm requires near")
+        if self.in_bbox is not None:
+            min_lon, min_lat, max_lon, max_lat = _parse_floats(self.in_bbox, 4, "inBbox")
+            _check_lonlat(min_lon, min_lat, "inBbox")
+            _check_lonlat(max_lon, max_lat, "inBbox")
+            if min_lon >= max_lon or min_lat >= max_lat:
+                raise ValueError("inBbox must be minLon,minLat,maxLon,maxLat with min < max")
+            self._bbox = (min_lon, min_lat, max_lon, max_lat)
+        if self.near is not None:
+            lon, lat = _parse_floats(self.near, 2, "near")
+            _check_lonlat(lon, lat, "near")
+            self._near_point = (lon, lat)
+        if self.in_polygon is not None:
+            points: list[tuple[float, float]] = []
+            for pair in self.in_polygon.split(","):
+                coords = pair.strip().split()
+                try:
+                    lon, lat = (float(c) for c in coords)
+                except ValueError:
+                    raise ValueError(
+                        "inPolygon must be 'lon lat' pairs separated by commas"
+                    ) from None
+                _check_lonlat(lon, lat, "inPolygon")
+                points.append((lon, lat))
+            if len(points) > MAX_POLYGON_POINTS:
+                raise ValueError(f"inPolygon supports at most {MAX_POLYGON_POINTS} points")
+            if points and points[0] != points[-1]:
+                points.append(points[0])  # close the ring
+            if len(points) < 4:  # a closed triangle is 4 points
+                raise ValueError("inPolygon needs at least 3 distinct points")
+            ring = ", ".join(f"{lon} {lat}" for lon, lat in points)
+            self._polygon_wkt = f"POLYGON(({ring}))"
+        return self
+
+    @property
+    def bbox(self) -> tuple[float, float, float, float] | None:
+        """(min_lon, min_lat, max_lon, max_lat) once validated."""
+        return self._bbox
+
+    @property
+    def near_point(self) -> tuple[float, float] | None:
+        """(lon, lat) once validated."""
+        return self._near_point
+
+    @property
+    def near_radius_km(self) -> float:
+        return self.radius_km if self.radius_km is not None else DEFAULT_NEAR_RADIUS_KM
+
+    @property
+    def polygon_wkt(self) -> str | None:
+        return self._polygon_wkt
+
 
 class PublicListingQuery(PublicListingFilters):
     """The endpoint's full query surface. One model on purpose: FastAPI
     (0.139) drops a query-param model back to a required scalar the moment any
-    other ``Query()`` param is declared next to it, so pagination and locale
-    live here rather than as separate params.
+    other ``Query()`` param is declared next to it, so pagination, sort and
+    locale live here rather than as separate params.
     """
 
+    sort: SearchSort = SearchSort.NEWEST
     cursor: str | None = None
     limit: int | None = Field(default=None, ge=1, le=MAX_PAGE_SIZE)
     locale: str | None = None
+
+
+class MapQuery(PublicListingFilters):
+    """`GET /listings/map` — the same filters, no pagination (the viewport is
+    the page)."""
+
+    locale: str | None = None
+
+
+class MapPinOut(OutSchema):
+    """One dot on the map (§8.3) — deliberately tiny."""
+
+    id: uuid.UUID
+    lat: float
+    lng: float
+    price: Decimal
+    status: ListingStatus
+
+
+class MapClusterOut(OutSchema):
+    """Server-side cluster: centroid + count, one per geohash bucket."""
+
+    lat: float
+    lng: float
+    count: int
+
+
+class MapOut(OutSchema):
+    clustered: bool
+    pins: list[MapPinOut]
+    clusters: list[MapClusterOut]
 
 
 def _point_out(value: Any) -> Any:
@@ -299,6 +462,7 @@ class ListingOut(OutSchema):
     expires_at: datetime | None
     stale_flagged_at: datetime | None
     view_count: int
+    featured: bool
     created_by: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
@@ -334,10 +498,14 @@ class PublicListingOut(OutSchema):
     address: dict[str, Any]
     location: PointOut | None
     published_at: datetime | None
+    featured: bool
     # Cover photo everywhere; the full gallery only on the detail endpoint
     # (`null` on list responses — the page never needs 50 photos per card).
     cover: PublicMediaOut | None = None
     media: list[PublicMediaOut] | None = None
+    # JSON-LD structured data (§8.3) — detail responses only; the frontend
+    # embeds it verbatim in a <script type="application/ld+json">.
+    json_ld: dict[str, Any] | None = None
 
     @classmethod
     def from_listing(
@@ -347,6 +515,7 @@ class PublicListingOut(OutSchema):
         *,
         cover: PublicMediaOut | None = None,
         media: list[PublicMediaOut] | None = None,
+        json_ld: dict[str, Any] | None = None,
     ) -> "PublicListingOut":
         lonlat = point_lonlat(listing.location)
         return cls(
@@ -372,9 +541,61 @@ class PublicListingOut(OutSchema):
             address=listing.address,
             location=PointOut(lat=lonlat[1], lng=lonlat[0]) if lonlat else None,
             published_at=listing.published_at,
+            featured=listing.featured,
             cover=cover,
             media=media,
+            json_ld=json_ld,
         )
+
+
+def build_json_ld(listing: Listing, locale: str, *, images: list[str]) -> dict[str, Any]:
+    """schema.org ``RealEstateListing`` for the public detail page (§8.3).
+
+    JSON-LD-*ready*: the frontend owns the page URL, so no ``url`` key here.
+    """
+    data: dict[str, Any] = {
+        "@context": "https://schema.org",
+        "@type": "RealEstateListing",
+        "name": pick_localized(listing.title, locale) or "",
+        "identifier": listing.reference_code,
+        "offers": {
+            "@type": "Offer",
+            "price": str(listing.price),
+            "priceCurrency": listing.currency,
+        },
+    }
+    description = pick_localized(listing.description, locale)
+    if description:
+        data["description"] = description
+    if listing.published_at is not None:
+        data["datePosted"] = listing.published_at.isoformat()
+    if images:
+        data["image"] = images
+    if listing.beds is not None:
+        data["numberOfRooms"] = listing.beds
+    if listing.area_built is not None:
+        data["floorSize"] = {
+            "@type": "QuantitativeValue",
+            "value": str(listing.area_built),
+            "unitCode": "MTK",  # UN/CEFACT: square metres
+        }
+    address = {
+        key: listing.address[src]
+        for key, src in (
+            ("streetAddress", "line1"),
+            ("addressLocality", "city"),
+            ("addressRegion", "state"),
+            ("postalCode", "postal_code"),
+            ("addressCountry", "country"),
+        )
+        if listing.address.get(src)
+    }
+    if address:
+        data["address"] = {"@type": "PostalAddress", **address}
+    lonlat = point_lonlat(listing.location)
+    if lonlat:
+        data["geo"] = {"@type": "GeoCoordinates", "latitude": lonlat[1], "longitude": lonlat[0]}
+    return data
 
 
 class StatusHistoryOut(OutSchema):
