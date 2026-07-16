@@ -34,11 +34,11 @@ from app.core.security import (
     jti_denylist_key,
     user_jtis_key,
 )
-from app.integrations.email.service import EmailMessage, EmailService
 from app.modules.auth.models import AuthSession
 from app.modules.auth.repository import SessionRepository
 from app.modules.auth.schemas import LoginRequest, RegisterRequest
 from app.modules.users.service import UserIdentity, UserService, get_user_service
+from app.workers.tasks.email import send_email
 
 logger = structlog.get_logger(__name__)
 
@@ -73,14 +73,12 @@ class AuthService:
         users: UserService,
         sessions: SessionRepository,
         redis: Redis,
-        email: EmailService,
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
         self.users = users
         self.sessions = sessions
         self.redis = redis
-        self.email = email
         self.settings = settings
         self.session_factory = session_factory
 
@@ -218,7 +216,9 @@ class AuthService:
     async def _revoke_tracked_jtis(self, user_id: uuid.UUID) -> None:
         try:
             key = user_jtis_key(user_id)
-            jtis = await self.redis.smembers(key)
+            # redis-py<7 (pinned transitively by celery[redis], §12) types
+            # `smembers` as a sync/async overload union; this client is async.
+            jtis = await self.redis.smembers(key)  # type: ignore[misc]
             if not jtis:
                 return
             pipe = self.redis.pipeline()
@@ -312,13 +312,13 @@ class AuthService:
         return uuid.UUID(value if isinstance(value, str) else value.decode())
 
     async def _send(self, to: str, subject: str, text: str) -> None:
-        """Fail-soft: a down SMTP relay must not turn registration or the
-        (deliberately opaque) forgot-password flow into a 500. Sends move to a
-        Celery task in Part 5."""
+        """Fail-soft: a broker hiccup must not turn registration or the
+        (deliberately opaque) forgot-password flow into a 500. Delivery itself
+        now runs off the request path entirely (§12) — this only enqueues."""
         try:
-            await self.email.send(EmailMessage(to=to, subject=subject, text=text))
+            send_email.delay(to=to, subject=subject, text=text)
         except Exception:
-            logger.warning("auth_email_send_failed", subject=subject)
+            logger.warning("auth_email_enqueue_failed", subject=subject)
 
 
 def get_auth_service(session: SessionDep, request: Request) -> AuthService:
@@ -326,7 +326,6 @@ def get_auth_service(session: SessionDep, request: Request) -> AuthService:
         users=get_user_service(session),
         sessions=SessionRepository(session),
         redis=request.app.state.redis,
-        email=request.app.state.email_service,
         settings=request.app.state.settings,
         session_factory=request.app.state.session_factory,
     )

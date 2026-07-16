@@ -1,0 +1,88 @@
+"""DB access for Celery tasks.
+
+Tasks run in a separate process from the FastAPI app and cannot share its
+pooled engine/event loop, so each call site opens a short-lived engine of its
+own (``run_scoped``) — or one shared engine for a whole batch of scoped calls
+(``run_scoped_many``, for jobs that loop over many tenants). Each individual
+transaction still mirrors ``core.database.get_session``: ``SET LOCAL
+app.tenant_id`` when a tenant is given, commit on success.
+"""
+
+import asyncio
+import uuid
+from collections.abc import Awaitable, Callable
+from concurrent.futures import ThreadPoolExecutor
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.core.config import get_settings
+from app.core.database import create_engine, create_session_factory, set_tenant_guc
+
+
+def run_sync[T](coro: Awaitable[T]) -> T:
+    """Run an awaitable from a sync Celery task body.
+
+    A real worker process (prefork, no asyncio) always takes the plain
+    ``asyncio.run`` path. Celery's eager mode (used by the test suite, §13)
+    executes the task body inline inside pytest-asyncio's already-running
+    loop, where ``asyncio.run`` would raise — that case gets its own loop on
+    a worker thread instead.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)  # type: ignore[arg-type]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()  # type: ignore[arg-type]
+
+
+async def _scoped_transaction[T](
+    session_factory: async_sessionmaker[AsyncSession],
+    tenant_id: uuid.UUID | None,
+    fn: Callable[[AsyncSession], Awaitable[T]],
+) -> T:
+    async with session_factory() as session, session.begin():
+        if tenant_id is not None:
+            await set_tenant_guc(session, tenant_id)
+        return await fn(session)
+
+
+async def _run_scoped[T](
+    tenant_id: uuid.UUID | None, fn: Callable[[AsyncSession], Awaitable[T]]
+) -> T:
+    engine = create_engine(get_settings())
+    try:
+        session_factory = create_session_factory(engine)
+        return await _scoped_transaction(session_factory, tenant_id, fn)
+    finally:
+        await engine.dispose()
+
+
+def run_scoped[T](tenant_id: uuid.UUID | None, fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Sync entry point for Celery task bodies: run ``fn`` in one tenant-scoped
+    transaction, safely under both a real worker and eager-mode tests."""
+    return run_sync(_run_scoped(tenant_id, fn))
+
+
+async def _run_scoped_many[T](
+    calls: list[tuple[uuid.UUID | None, Callable[[AsyncSession], Awaitable[T]]]],
+) -> list[T]:
+    engine = create_engine(get_settings())
+    try:
+        session_factory = create_session_factory(engine)
+        return [
+            await _scoped_transaction(session_factory, tenant_id, fn)
+            for tenant_id, fn in calls
+        ]
+    finally:
+        await engine.dispose()
+
+
+def run_scoped_many[T](
+    calls: list[tuple[uuid.UUID | None, Callable[[AsyncSession], Awaitable[T]]]],
+) -> list[T]:
+    """Like ``run_scoped``, but runs a sequence of scoped transactions on one
+    shared engine — for batch jobs that loop over many tenants, where opening
+    a fresh engine per tenant is pure administrative overhead (SET LOCAL
+    already isolates each transaction on a shared pool)."""
+    return run_sync(_run_scoped_many(calls))

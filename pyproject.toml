@@ -19,6 +19,7 @@ dependencies = [
     "structlog>=24.4",
     "uuid-utils>=0.10",
     "aiosmtplib>=5.1.2",
+    "celery[redis]>=5.4",
 ]
 
 [dependency-groups]
@@ -67,8 +68,14 @@ packages = ["app"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["geoalchemy2.*", "asyncpg.*"]
+module = ["geoalchemy2.*", "asyncpg.*", "celery.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# celery ships no py.typed marker, so `@shared_task` is itself untyped —
+# strict mode would otherwise erase every task function's signature.
+module = ["app.workers.tasks.*"]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

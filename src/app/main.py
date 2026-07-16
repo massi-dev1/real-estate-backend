@@ -15,7 +15,6 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.core.tenancy import TenantResolutionMiddleware
 from app.health import router as health_router
-from app.integrations.email.service import SmtpEmailService
 from app.modules.auth.router import auth_router, platform_auth_router
 from app.modules.listings.router import portal_router as listings_portal_router
 from app.modules.listings.router import public_router as listings_public_router
@@ -38,7 +37,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis=app.state.redis,
         cache_ttl_seconds=settings.tenant_cache_ttl_seconds,
     )
-    app.state.email_service = SmtpEmailService(settings)
     logger.info("app_startup", env=settings.app_env)
     yield
     await app.state.engine.dispose()

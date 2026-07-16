@@ -126,6 +126,9 @@ class Listing(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     published_at: Mapped[datetime | None]
     expires_at: Mapped[datetime | None]
+    # Set by the Beat expiry-check job (§8.1, §12) when a published listing goes
+    # stale; cleared whenever the listing is edited or moved off `published`.
+    stale_flagged_at: Mapped[datetime | None]
     view_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
     created_by: Mapped[uuid.UUID | None] = mapped_column(

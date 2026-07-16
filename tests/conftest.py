@@ -14,6 +14,8 @@ os.environ["DATABASE_DDL_URL"] = (
     "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_test"
 )
 os.environ["REDIS_URL"] = "redis://localhost:6379/1"
+os.environ["CELERY_BROKER_URL"] = "redis://localhost:6379/1"
+os.environ["CELERY_RESULT_BACKEND"] = "redis://localhost:6379/1"
 
 import subprocess
 import sys
@@ -33,6 +35,13 @@ from app.core.permissions import Role
 from app.core.security import hash_password
 from app.main import create_app
 from app.modules.users.models import User
+from app.workers.celery_app import celery_app
+
+# Tasks run inline, synchronously, in-process — no live broker/worker needed
+# for `.delay()` calls exercised by the test suite (§13 keeps this a real
+# Postgres/Redis suite; Celery eager mode is the one deliberate fake here,
+# since a real worker process is out of scope for API-level tests).
+celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 

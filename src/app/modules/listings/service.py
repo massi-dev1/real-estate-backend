@@ -184,6 +184,9 @@ class ListingService:
             del patch["location"]
         for field, value in patch.items():
             setattr(listing, field, value)
+        if patch and listing.stale_flagged_at is not None:
+            # An edit is exactly the "agent review" the flag was raising (§8.1).
+            listing.stale_flagged_at = None
         await self.repo.flush()
         return listing
 
@@ -287,6 +290,8 @@ class ListingService:
         listing.status = to_status
         if to_status is ListingStatus.PUBLISHED:
             listing.published_at = datetime.now(UTC)
+        else:
+            listing.stale_flagged_at = None
         self.repo.add(
             ListingStatusHistory(
                 tenant_id=tenant.id,

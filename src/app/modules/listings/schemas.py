@@ -296,6 +296,7 @@ class ListingOut(OutSchema):
     location: PointOut | None
     published_at: datetime | None
     expires_at: datetime | None
+    stale_flagged_at: datetime | None
     view_count: int
     created_by: uuid.UUID | None
     created_at: datetime

@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     smtp_port: int = 1025
     email_from: str = "no-reply@realestate.local"
 
+    # Celery (§12): one Redis instance also serves as broker + result backend.
+    # A dedicated DB index keeps task keys out of the cache/session keyspace.
+    celery_broker_url: str = "redis://localhost:6379/2"
+    celery_result_backend: str = "redis://localhost:6379/2"
+    # A published listing past this age is flagged stale for agent review (§8.1).
+    listing_stale_after_days: int = 90
+
     cors_origins: str = ""
 
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".
