@@ -14,7 +14,9 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Import every module's models so their tables register on Base.metadata.
-import app.modules.tenants.models  # noqa: F401
+import app.modules.auth.models
+import app.modules.tenants.models
+import app.modules.users.models  # noqa: F401
 from app.core.config import get_settings
 from app.core.database import Base
 

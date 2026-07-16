@@ -36,13 +36,13 @@ async def test_create_tenant(client: AsyncClient, platform_headers: dict[str, st
     assert body["domains"][0]["isPrimary"] is True
 
 
-async def test_platform_key_required(client: AsyncClient) -> None:
+async def test_platform_auth_required(client: AsyncClient) -> None:
     resp = await client.get("/api/v1/platform/tenants")
     assert resp.status_code == 401
     assert resp.headers["content-type"].startswith("application/problem+json")
 
     resp = await client.get(
-        "/api/v1/platform/tenants", headers={"X-Platform-Key": "wrong-key-wrong-key"}
+        "/api/v1/platform/tenants", headers={"Authorization": "Bearer not-a-real-token"}
     )
     assert resp.status_code == 401
 

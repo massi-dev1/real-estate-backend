@@ -23,3 +23,27 @@ def disable_tenant_rls_sql(table: str) -> tuple[str, ...]:
         f"DROP POLICY tenant_isolation ON {table}",
         f"ALTER TABLE {table} DISABLE ROW LEVEL SECURITY",
     )
+
+
+def enable_identity_rls_sql(table: str) -> tuple[str, ...]:
+    """RLS for identity tables (``users``, ``sessions``) whose ``tenant_id`` is
+    nullable because platform-staff rows have no tenant (§7.2).
+
+    Deliberate deviation from :func:`enable_tenant_rls_sql`: the policy reads
+    the GUC with ``missing_ok`` so that platform requests (which never set
+    ``app.tenant_id``) can reach the NULL-tenant rows. ``IS NOT DISTINCT FROM``
+    keeps it strict in both directions — a tenant-scoped session sees exactly
+    its tenant's rows, an unscoped session sees exactly the platform rows, and
+    neither can ever read (or write, via the implicit WITH CHECK) the other's.
+    """
+    return (
+        f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY",
+        (
+            f"CREATE POLICY tenant_isolation ON {table} USING (tenant_id IS NOT DISTINCT FROM "
+            "NULLIF(current_setting('app.tenant_id', true), '')::uuid)"
+        ),
+    )
+
+
+def disable_identity_rls_sql(table: str) -> tuple[str, ...]:
+    return disable_tenant_rls_sql(table)

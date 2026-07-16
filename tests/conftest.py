@@ -1,5 +1,6 @@
 """Shared fixtures. Tests run against the real docker-compose services
-(Postgres+PostGIS on realestate_test, Redis db 1) — never SQLite (§13)."""
+(Postgres+PostGIS on realestate_test, Redis db 1, Mailpit SMTP) — never
+SQLite (§13)."""
 
 import os
 
@@ -13,11 +14,11 @@ os.environ["DATABASE_DDL_URL"] = (
     "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_test"
 )
 os.environ["REDIS_URL"] = "redis://localhost:6379/1"
-os.environ["PLATFORM_API_KEY"] = "test-platform-key-0123456789abcdef"
 
 import subprocess
 import sys
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import pytest
@@ -27,11 +28,19 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.core.config import get_settings
+from app.core.database import set_tenant_guc
+from app.core.permissions import Role
+from app.core.security import hash_password
 from app.main import create_app
+from app.modules.users.models import User
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-PLATFORM_HEADERS = {"X-Platform-Key": os.environ["PLATFORM_API_KEY"]}
+PLATFORM_ADMIN_EMAIL = "root@platform.example.com"
+# One password (and one Argon2 hash, computed once) shared by all fixture-made
+# accounts — hashing per test would add ~50ms each.
+FIXTURE_PASSWORD = "Fixture-Pass-123456"
+_FIXTURE_PASSWORD_HASH = hash_password(FIXTURE_PASSWORD)
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -58,16 +67,59 @@ async def app() -> AsyncIterator[FastAPI]:
 
 @pytest.fixture(autouse=True)
 async def _clean_state(app: FastAPI) -> AsyncIterator[None]:
-    """Each test starts from empty tenant tables and a cold Redis cache."""
+    """Each test starts from empty tables and a cold Redis cache."""
     yield
     async with app.state.engine.begin() as conn:
+        # Tenant users/sessions cascade from tenants; the second DELETE removes
+        # platform staff (the identity RLS policy exposes exactly the
+        # NULL-tenant rows to this unscoped connection).
         await conn.execute(text("DELETE FROM tenants"))
+        await conn.execute(text("DELETE FROM users"))
     await app.state.redis.flushdb()
 
 
 @pytest.fixture
-def platform_headers() -> dict[str, str]:
-    return dict(PLATFORM_HEADERS)
+async def platform_headers(app: FastAPI, client: AsyncClient) -> dict[str, str]:
+    """A logged-in platform admin's Authorization header (replaces the Part 2
+    API-key stopgap)."""
+    async with app.state.session_factory() as session, session.begin():
+        session.add(
+            User(
+                tenant_id=None,
+                email=PLATFORM_ADMIN_EMAIL,
+                password_hash=_FIXTURE_PASSWORD_HASH,
+                role=Role.PLATFORM_ADMIN,
+            )
+        )
+    resp = await client.post(
+        "/api/v1/platform/auth/login",
+        json={"email": PLATFORM_ADMIN_EMAIL, "password": FIXTURE_PASSWORD},
+    )
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['accessToken']}"}
+
+
+@pytest.fixture
+def create_tenant_user(
+    app: FastAPI,
+) -> Callable[..., Awaitable[uuid.UUID]]:
+    """Insert a tenant user directly (with the tenant GUC set, as RLS demands).
+
+    Used to provision the first admin of a tenant — the API path for that
+    (tenant onboarding) is a later part.
+    """
+
+    async def _create(tenant_id: str | uuid.UUID, email: str, role: Role) -> uuid.UUID:
+        tid = uuid.UUID(str(tenant_id))
+        user = User(
+            tenant_id=tid, email=email, password_hash=_FIXTURE_PASSWORD_HASH, role=role
+        )
+        async with app.state.session_factory() as session, session.begin():
+            await set_tenant_guc(session, tid)
+            session.add(user)
+        return user.id
+
+    return _create
 
 
 @pytest.fixture

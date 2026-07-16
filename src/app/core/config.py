@@ -26,14 +26,18 @@ class Settings(BaseSettings):
 
     redis_url: str = "redis://localhost:6379/0"
 
-    # Interim auth for /api/v1/platform/* until platform-staff RBAC lands (Part 3).
-    platform_api_key: str = Field(min_length=16)
-
     # Host → tenant lookups are cached in Redis for this long (§4.1).
     tenant_cache_ttl_seconds: int = 300
 
+    # Auth (§7.1): short-lived access JWT + rotating refresh token in a cookie.
+    access_token_ttl_seconds: int = 900
+    refresh_token_ttl_days: int = 30
+    password_reset_ttl_seconds: int = 1800
+    email_verification_ttl_seconds: int = 86400
+
     smtp_host: str = "localhost"
     smtp_port: int = 1025
+    email_from: str = "no-reply@realestate.local"
 
     cors_origins: str = ""
 

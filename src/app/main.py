@@ -15,9 +15,12 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.core.tenancy import TenantResolutionMiddleware
 from app.health import router as health_router
+from app.integrations.email.service import SmtpEmailService
+from app.modules.auth.router import auth_router, platform_auth_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
+from app.modules.users.router import staff_router, users_router
 
 logger = structlog.get_logger(__name__)
 
@@ -33,6 +36,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis=app.state.redis,
         cache_ttl_seconds=settings.tenant_cache_ttl_seconds,
     )
+    app.state.email_service = SmtpEmailService(settings)
     logger.info("app_startup", env=settings.app_env)
     yield
     await app.state.engine.dispose()
@@ -45,6 +49,10 @@ def build_api_v1_router() -> APIRouter:
     router = APIRouter(prefix="/api/v1")
     router.include_router(tenants_platform_router)
     router.include_router(tenants_site_router)
+    router.include_router(auth_router)
+    router.include_router(platform_auth_router)
+    router.include_router(users_router)
+    router.include_router(staff_router)
     return router
 
 
