@@ -16,7 +16,7 @@ from pydantic import Field, PrivateAttr, field_validator, model_validator
 from app.common.geo import point_lonlat
 from app.core.i18n import SUPPORTED_LOCALES, pick_localized
 from app.core.pagination import MAX_PAGE_SIZE
-from app.core.schema import BaseSchema, InputSchema, OutSchema
+from app.core.schema import BaseSchema, InputSchema, OutSchema, reject_null_for
 from app.modules.listings.models import (
     Listing,
     ListingPurpose,
@@ -161,22 +161,6 @@ class ListingCreate(InputSchema):
         return self
 
 
-# PATCH fields whose column is NOT NULL — an explicit ``null`` cannot mean
-# "clear it", so it is rejected instead of dying at the DB.
-_NON_NULLABLE_UPDATE_FIELDS = frozenset(
-    {
-        "property_type",
-        "title",
-        "description",
-        "price",
-        "currency",
-        "negotiable",
-        "features",
-        "featured",
-    }
-)
-
-
 class ListingUpdate(InputSchema):
     """PATCH payload — everything optional, ``exclude_unset`` semantics.
 
@@ -225,16 +209,18 @@ class ListingUpdate(InputSchema):
             raise ValueError(f"unknown features: {sorted(unknown)}")
         return sorted(set(value))
 
-    @model_validator(mode="after")
-    def no_explicit_null_for_required(self) -> Self:
-        nulled = {
-            f
-            for f in self.model_fields_set & _NON_NULLABLE_UPDATE_FIELDS
-            if getattr(self, f) is None
-        }
-        if nulled:
-            raise ValueError(f"fields cannot be set to null: {sorted(nulled)}")
-        return self
+    # PATCH fields whose column is NOT NULL — an explicit ``null`` cannot mean
+    # "clear it", so it is rejected instead of dying at the DB.
+    _reject_required_nulls = reject_null_for(
+        "property_type",
+        "title",
+        "description",
+        "price",
+        "currency",
+        "negotiable",
+        "features",
+        "featured",
+    )
 
 
 class TransitionRequest(InputSchema):

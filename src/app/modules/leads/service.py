@@ -63,11 +63,9 @@ from app.workers.tasks.email import send_email
 
 logger = structlog.get_logger(__name__)
 
-# Manager-action gates (reassigning a lead); distinct from *visibility*.
+# Manager-action gates (reassigning a lead); distinct from *visibility*, which
+# lives on AgentsService.scope_user_ids_for.
 MANAGES_ALL_ROLES = frozenset({Role.ADMIN, Role.TEAM_LEAD, Role.MARKETING})
-# Tenant-wide visibility. TEAM_LEAD deliberately absent since §8.5: team leads
-# see their own leads plus their team members' — no longer the whole tenant.
-TENANT_WIDE_ROLES = frozenset({Role.ADMIN, Role.MARKETING})
 
 # Stages where a drip sequence keeps running — a real conversation underway
 # (qualified+) makes further automated nudges noise, or worse, a risk of
@@ -136,12 +134,10 @@ class LeadsService:
         self, tenant_id: uuid.UUID, actor: AuthenticatedUser
     ) -> set[uuid.UUID] | None:
         """``None`` means tenant-wide; a user-id set narrows to assigned leads —
-        one id for an agent, self + team members for a team lead (§8.5)."""
-        if actor.role in TENANT_WIDE_ROLES:
-            return None
-        if actor.role is Role.TEAM_LEAD:
-            return {actor.id} | await self.agents.team_scope_user_ids(tenant_id, actor.id)
-        return {actor.id}
+        one id for an agent, self + team members for a team lead (§8.5). The
+        ADMIN/MARKETING/TEAM_LEAD/AGENT split itself lives once on
+        ``AgentsService`` so listings and leads don't each re-derive it."""
+        return await self.agents.scope_user_ids_for(tenant_id, actor)
 
     async def _get_scoped_lead_or_404(
         self,
@@ -315,64 +311,19 @@ class LeadsService:
         lead.agent_id = agent_id
         return agent_id
 
-    async def _pick_territory(
-        self, tenant: TenantContext, lead: Lead, config: dict[str, Any]
+    async def _least_loaded(
+        self, tenant_id: uuid.UUID, candidates: list[uuid.UUID], config: dict[str, Any]
     ) -> uuid.UUID | None:
-        """Point-in-polygon over published profiles' ``service_areas`` (§8.5);
-        ties broken least-loaded like round-robin (same accepted best-effort
-        concurrency stance). Leads without a listing point stay unassigned —
-        the >30-min escalation sweep already covers those."""
-        if lead.listing_id is None:
-            return None
-        point = await self.listings.point_for(tenant.id, lead.listing_id)
-        if point is None:
-            return None
-        lon, lat = point
-        candidate_ids = await self.agents.candidates_for_point(tenant.id, lon, lat)
-        candidates: list[uuid.UUID] = []
-        for candidate_id in candidate_ids:
-            # Re-validated: the agent may have been disabled since.
-            identity = await self.users.get_identity_if_active(tenant.id, candidate_id)
-            if identity is not None:
-                candidates.append(identity.id)
+        """Least-loaded pick over an already-validated candidate pool.
+        Deliberately best-effort under concurrency: two simultaneous captures
+        can read the same counts and pick the same agent, briefly skewing
+        balance (or nudging past ``max_open_leads_per_agent`` by one). A
+        per-tenant lock on every public capture isn't worth serializing the
+        hot path for a soft load-balancing target — unlike reference codes
+        (Part 4), nothing here must be unique. Shared by round-robin and
+        territory assignment (§8.4/§8.5)."""
         if not candidates:
             return None
-        max_open = config.get("max_open_leads_per_agent")
-        counts = await self.repo.open_lead_counts(tenant.id, candidates)
-        best_id: uuid.UUID | None = None
-        best_count: int | None = None
-        for candidate_id in candidates:
-            count = counts.get(candidate_id, 0)
-            if max_open is not None and count >= max_open:
-                continue
-            if best_count is None or count < best_count:
-                best_id, best_count = candidate_id, count
-        return best_id
-
-    async def _pick_round_robin(
-        self, tenant_id: uuid.UUID, config: dict[str, Any]
-    ) -> uuid.UUID | None:
-        """Least-loaded pick over the candidate pool. Deliberately best-effort
-        under concurrency: two simultaneous captures can read the same counts
-        and pick the same agent, briefly skewing balance (or nudging past
-        ``max_open_leads_per_agent`` by one). A per-tenant lock on every
-        public capture isn't worth serializing the hot path for a soft
-        load-balancing target — unlike reference codes (Part 4), nothing here
-        must be unique."""
-        # config is written only through AssignmentRuleConfig, so agent_pool
-        # entries are guaranteed UUID strings and max_open an int ≥ 1.
-        pool_ids = config.get("agent_pool")
-        if pool_ids:
-            candidates = []
-            for raw_id in pool_ids:
-                identity = await self.users.get_identity_if_active(tenant_id, uuid.UUID(raw_id))
-                if identity is not None:
-                    candidates.append(identity.id)
-        else:
-            candidates = [u.id for u in await self.users.list_active_agents(tenant_id)]
-        if not candidates:
-            return None
-
         max_open = config.get("max_open_leads_per_agent")
         counts = await self.repo.open_lead_counts(tenant_id, candidates)
         best_id: uuid.UUID | None = None
@@ -384,6 +335,41 @@ class LeadsService:
             if best_count is None or count < best_count:
                 best_id, best_count = agent_id, count
         return best_id
+
+    async def _pick_territory(
+        self, tenant: TenantContext, lead: Lead, config: dict[str, Any]
+    ) -> uuid.UUID | None:
+        """Point-in-polygon over published profiles' ``service_areas`` (§8.5);
+        ties broken least-loaded like round-robin. Leads without a listing
+        point stay unassigned — the >30-min escalation sweep already covers
+        those."""
+        if lead.listing_id is None:
+            return None
+        point = await self.listings.point_for(tenant.id, lead.listing_id)
+        if point is None:
+            return None
+        lon, lat = point
+        candidate_ids = await self.agents.candidates_for_point(tenant.id, lon, lat)
+        if not candidate_ids:
+            return None
+        # Re-validated in one batch: an agent may have been disabled since.
+        identities = await self.users.identities_for(tenant.id, candidate_ids)
+        candidates = [cid for cid in candidate_ids if cid in identities]
+        return await self._least_loaded(tenant.id, candidates, config)
+
+    async def _pick_round_robin(
+        self, tenant_id: uuid.UUID, config: dict[str, Any]
+    ) -> uuid.UUID | None:
+        # config is written only through AssignmentRuleConfig, so agent_pool
+        # entries are guaranteed UUID strings and max_open an int ≥ 1.
+        pool_ids = config.get("agent_pool")
+        if pool_ids:
+            requested = [uuid.UUID(raw_id) for raw_id in pool_ids]
+            identities = await self.users.identities_for(tenant_id, requested)
+            candidates = [uid for uid in requested if uid in identities]
+        else:
+            candidates = [u.id for u in await self.users.list_active_agents(tenant_id)]
+        return await self._least_loaded(tenant_id, candidates, config)
 
     async def update_assignment_rule(
         self, tenant: TenantContext, strategy: AssignmentStrategy, config: AssignmentRuleConfig

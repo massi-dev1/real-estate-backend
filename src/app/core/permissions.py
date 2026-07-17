@@ -81,6 +81,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_MANAGE,
             Permission.LEAD_VIEW_ALL,
             Permission.LEAD_ASSIGN,
+            Permission.AGENT_MANAGE,
         }
     ),
     Role.ADMIN: frozenset(

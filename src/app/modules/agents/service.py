@@ -46,6 +46,8 @@ logger = structlog.get_logger(__name__)
 
 # Roles that can carry a public agent profile.
 PROFILE_ROLES = frozenset({Role.AGENT, Role.TEAM_LEAD})
+# AGENT_MANAGE holders whose reach is tenant-wide, not team-scoped (§8.5).
+TENANT_WIDE_MANAGER_ROLES = frozenset({Role.ADMIN, Role.MARKETING})
 
 
 class AgentsService:
@@ -80,6 +82,20 @@ class AgentsService:
     def _can_manage(actor: AuthenticatedUser) -> bool:
         return actor.has_permission(Permission.AGENT_MANAGE)
 
+    async def _can_manage_profile(
+        self, tenant_id: uuid.UUID, actor: AuthenticatedUser, profile: AgentProfile
+    ) -> bool:
+        """``AGENT_MANAGE`` reaches every profile for admins/marketing, but a
+        team lead only reaches profiles of users on a team they lead (§8.5) —
+        the permission alone is not an ownership check."""
+        if not self._can_manage(actor):
+            return False
+        if actor.role in TENANT_WIDE_MANAGER_ROLES:
+            return True
+        if actor.role is Role.TEAM_LEAD:
+            return profile.user_id in await self.team_scope_user_ids(tenant_id, actor.id)
+        return False
+
     async def _get_scoped_or_404(
         self,
         tenant: TenantContext,
@@ -89,7 +105,10 @@ class AgentsService:
         for_update: bool = False,
     ) -> AgentProfile:
         profile = await self.repo.get(tenant.id, profile_id, for_update=for_update)
-        if profile is None or not (self._can_manage(actor) or profile.user_id == actor.id):
+        if profile is None or not (
+            profile.user_id == actor.id
+            or await self._can_manage_profile(tenant.id, actor, profile)
+        ):
             # 404 for both "doesn't exist" and "not yours" — no existence oracle.
             raise NotFoundError("Agent profile not found.")
         return profile
@@ -300,6 +319,19 @@ class AgentsService:
     async def has_territory_data(self, tenant_id: uuid.UUID) -> bool:
         return await self.repo.any_territory_profile(tenant_id)
 
+    async def scope_user_ids_for(
+        self, tenant_id: uuid.UUID, actor: AuthenticatedUser
+    ) -> set[uuid.UUID] | None:
+        """Shared visibility-scoping rule (§8.5): ``None`` means tenant-wide —
+        admins and marketing; a team lead sees self + their team members; any
+        other role sees only their own. Listings and leads both delegate here
+        instead of each re-deriving the ADMIN/MARKETING/TEAM_LEAD/AGENT split."""
+        if actor.role in TENANT_WIDE_MANAGER_ROLES:
+            return None
+        if actor.role is Role.TEAM_LEAD:
+            return {actor.id} | await self.team_scope_user_ids(tenant_id, actor.id)
+        return {actor.id}
+
     async def team_scope_user_ids(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID
     ) -> set[uuid.UUID]:
@@ -344,8 +376,8 @@ class AgentsService:
         if lead_user_id is None:
             return None
         identity = await self.users.get_identity_if_active(tenant_id, lead_user_id)
-        if identity is None:
-            raise ConflictError("The team lead does not exist or is not active.")
+        if identity is None or identity.role not in PROFILE_ROLES:
+            raise ConflictError("The team lead must be an active agent or team-lead account.")
         return lead_user_id
 
     async def get_team(

@@ -50,12 +50,9 @@ MAP_PIN_LIMIT = 500
 SITEMAP_MAX_URLS = 50_000
 
 # Roles whose LISTING_MANAGE covers the whole tenant, not just their own rows
-# (manager-action gates: featuring, reassigning, unassigning).
+# (manager-action gates: featuring, reassigning, unassigning). Visibility
+# scoping (tenant-wide vs team vs self) lives on AgentsService.scope_user_ids_for.
 MANAGES_ALL_ROLES = frozenset({Role.ADMIN, Role.TEAM_LEAD, Role.MARKETING})
-# Roles whose *visibility* is tenant-wide. TEAM_LEAD deliberately absent since
-# §8.5: team leads see their own rows plus their team members' — real
-# team-scoped visibility, not the tenant-wide bucket they shared before.
-TENANT_WIDE_ROLES = frozenset({Role.ADMIN, Role.MARKETING})
 
 # The workflow graph (§8.1). `archived → draft` is the relist path.
 ALLOWED_TRANSITIONS: dict[ListingStatus, frozenset[ListingStatus]] = {
@@ -101,12 +98,10 @@ class ListingService:
         self, tenant_id: uuid.UUID, actor: AuthenticatedUser
     ) -> set[uuid.UUID] | None:
         """``None`` means tenant-wide; a user-id set narrows to owned listings —
-        one id for an agent, self + team members for a team lead (§8.5)."""
-        if actor.role in TENANT_WIDE_ROLES:
-            return None
-        if actor.role is Role.TEAM_LEAD:
-            return {actor.id} | await self.agents.team_scope_user_ids(tenant_id, actor.id)
-        return {actor.id}
+        one id for an agent, self + team members for a team lead (§8.5). The
+        ADMIN/MARKETING/TEAM_LEAD/AGENT split itself lives once on
+        ``AgentsService`` so listings and leads don't each re-derive it."""
+        return await self.agents.scope_user_ids_for(tenant_id, actor)
 
     async def _get_scoped_or_404(
         self,

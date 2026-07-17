@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, field_validator, model_validator
 
 from app.core.i18n import SUPPORTED_LOCALES, pick_localized
-from app.core.schema import InputSchema, OutSchema
+from app.core.schema import InputSchema, OutSchema, reject_null_for
 from app.modules.media.models import (
     EMBED_KINDS,
     UPLOAD_KINDS,
@@ -115,16 +115,7 @@ class MediaUpdate(InputSchema):
     def valid_alt(cls, value: I18nText | None) -> I18nText | None:
         return _validate_alt_text(value)
 
-    @model_validator(mode="after")
-    def no_explicit_null_for_required(self) -> Self:
-        nulled = {
-            f
-            for f in self.model_fields_set & {"position", "is_cover", "alt_text"}
-            if getattr(self, f) is None
-        }
-        if nulled:
-            raise ValueError(f"fields cannot be set to null: {sorted(nulled)}")
-        return self
+    _reject_required_nulls = reject_null_for("position", "is_cover", "alt_text")
 
 
 class MediaVariantOut(OutSchema):

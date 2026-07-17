@@ -18,7 +18,7 @@ from pydantic import Field, field_validator, model_validator
 from app.common.geo import LonLat, multipolygon_rings
 from app.core.i18n import SUPPORTED_LOCALES, pick_localized
 from app.core.pagination import MAX_PAGE_SIZE
-from app.core.schema import BaseSchema, InputSchema, OutSchema
+from app.core.schema import BaseSchema, InputSchema, OutSchema, reject_null_for
 from app.modules.agents.models import AgentProfile, PhotoStatus
 from app.modules.listings.models import ListingStatus
 from app.modules.listings.schemas import PublicListingOut
@@ -181,16 +181,7 @@ class AgentProfileUpdate(InputSchema):
     def valid_areas(cls, value: list[list[LonLat]] | None) -> list[list[LonLat]] | None:
         return _validate_rings(value)
 
-    @model_validator(mode="after")
-    def no_explicit_null_for_required(self) -> Self:
-        nulled = {
-            f
-            for f in self.model_fields_set & {"slug", "specialties", "is_published"}
-            if getattr(self, f) is None
-        }
-        if nulled:
-            raise ValueError(f"fields cannot be set to null: {sorted(nulled)}")
-        return self
+    _reject_required_nulls = reject_null_for("slug", "specialties", "is_published")
 
 
 class PhotoVariantOut(OutSchema):
