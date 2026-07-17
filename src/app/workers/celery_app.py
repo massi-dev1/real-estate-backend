@@ -34,6 +34,8 @@ celery_app.conf.update(
         # emails — the same class email.* already occupies. `analytics` is for
         # pure-batch work with no human-facing side effect.
         "app.workers.tasks.leads.*": {"queue": "default"},
+        # Same reasoning: saved-search alerts/digests are human-facing email.
+        "app.workers.tasks.favorites.*": {"queue": "default"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -57,5 +59,11 @@ celery_app.conf.beat_schedule = {
     "sweep-lead-drips-and-escalations": {
         "task": "app.workers.tasks.leads.sweep_drips_and_escalations",
         "schedule": crontab(minute="*/15"),
+    },
+    # One daily tick covers both digest frequencies: daily rows every run,
+    # weekly rows on Mondays (the task itself makes the split — §8.9).
+    "send-saved-search-digests": {
+        "task": "app.workers.tasks.favorites.send_saved_search_digests",
+        "schedule": crontab(hour=7, minute=0),
     },
 }

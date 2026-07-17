@@ -6,6 +6,7 @@ This module is crypto only — the authenticated-user dependency and the RBAC
 """
 
 import hashlib
+import hmac
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -44,6 +45,28 @@ def hash_token(token: str) -> str:
     """SHA-256 hex digest for refresh/reset/verification tokens — a stolen DB
     or Redis snapshot must not contain usable tokens."""
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+def sign_value(purpose: str, value: str, settings: Settings) -> str:
+    """Stateless signed token ``value.hmac`` — for links that must survive
+    longer than a Redis TTL (e.g. per-saved-search unsubscribe, §8.9/§10.12).
+    ``purpose`` domain-separates signatures so a token minted for one link
+    type can never be replayed as another."""
+    sig = hmac.new(
+        settings.app_secret_key.encode(), f"{purpose}:{value}".encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{value}.{sig}"
+
+
+def unsign_value(purpose: str, token: str, settings: Settings) -> str | None:
+    """The verified value, or ``None`` for a missing/forged signature."""
+    value, sep, sig = token.rpartition(".")
+    if not sep:
+        return None
+    expected = hmac.new(
+        settings.app_secret_key.encode(), f"{purpose}:{value}".encode(), hashlib.sha256
+    ).hexdigest()
+    return value if hmac.compare_digest(sig, expected) else None
 
 
 def jti_denylist_key(jti: str) -> str:

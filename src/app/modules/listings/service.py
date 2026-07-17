@@ -18,7 +18,7 @@ from fastapi import Depends
 from sqlalchemy import Row
 
 from app.common.geo import LonLat, point_lonlat, to_point
-from app.core.database import SessionDep
+from app.core.database import SessionDep, on_commit
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Permission, Role
@@ -339,13 +339,25 @@ class ListingService:
         )
         await self.repo.flush()
         if to_status is ListingStatus.PUBLISHED:
-            # Domain event consumers (search index, saved-search alerts,
-            # portal syndication) arrive with the outbox in a later part.
             logger.info(
                 "listing_published",
                 listing_id=str(listing.id),
                 reference_code=listing.reference_code,
             )
+            tenant_id, listing_id_val = tenant.id, listing.id
+
+            async def _enqueue_alerts() -> None:
+                # Instant saved-search alerts (§8.9), post-commit so the
+                # matcher can never race an uncommitted publish. Lazy import:
+                # the task module imports the favorites service, which imports
+                # this module — a top-level import would be circular. A full
+                # outbox (portal syndication, search index) is still a later
+                # part.
+                from app.workers.tasks.favorites import match_published_listing
+
+                match_published_listing.delay(str(tenant_id), str(listing_id_val))
+
+            on_commit(self.repo.session, _enqueue_alerts)
         return listing
 
     async def history(
@@ -379,6 +391,28 @@ class ListingService:
         """Published listings assigned to an agent — the public profile page."""
         return await self.repo.list_published_by_agent(tenant.id, agent_user_id, limit=limit)
 
+    async def published_by_ids(
+        self, tenant_id: uuid.UUID, listing_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, Listing]:
+        """Currently-published listings among ``listing_ids``, keyed by id —
+        boundary accessor for favorites' dashboard cards (§8.9)."""
+        rows = await self.repo.published_by_ids(tenant_id, listing_ids)
+        return {row.id: row for row in rows}
+
+    async def published_matches(
+        self,
+        tenant_id: uuid.UUID,
+        listing_id: uuid.UUID,
+        *,
+        filters: PublicListingFilters,
+        locale: str,
+    ) -> bool:
+        """Does a published listing satisfy a filter set? — boundary accessor
+        for the instant saved-search matcher (§8.9)."""
+        return await self.repo.published_matches(
+            tenant_id, listing_id, filters=filters, locale=locale
+        )
+
     # ---- public site ----
 
     async def get_public(self, tenant: TenantContext, ref_or_id: str) -> Listing:
@@ -396,11 +430,18 @@ class ListingService:
         sort: SearchSort,
         cursor: str | None,
         limit: int | None,
+        published_since: datetime | None = None,
     ) -> tuple[list[Listing], str | None]:
         page_size = clamp_limit(limit)
         after = _decode_public_cursor(cursor, sort) if cursor else None
         rows = await self.repo.list_published(
-            tenant.id, filters=filters, locale=locale, sort=sort, after=after, limit=page_size
+            tenant.id,
+            filters=filters,
+            locale=locale,
+            sort=sort,
+            after=after,
+            limit=page_size,
+            published_since=published_since,
         )
         items = rows[:page_size]
         next_cursor = _encode_public_cursor(items[-1], sort) if len(rows) > page_size else None

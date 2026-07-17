@@ -20,6 +20,8 @@ from app.modules.agents.router import portal_router as agents_portal_router
 from app.modules.agents.router import public_router as agents_public_router
 from app.modules.agents.router import teams_router
 from app.modules.auth.router import auth_router, platform_auth_router
+from app.modules.favorites.router import me_router as favorites_me_router
+from app.modules.favorites.router import public_router as favorites_public_router
 from app.modules.leads.router import capture_router as leads_capture_router
 from app.modules.leads.router import portal_router as leads_portal_router
 from app.modules.listings.router import portal_router as listings_portal_router
@@ -71,6 +73,8 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(agents_public_router)
     router.include_router(agents_portal_router)
     router.include_router(teams_router)
+    router.include_router(favorites_me_router)
+    router.include_router(favorites_public_router)
     return router
 
 

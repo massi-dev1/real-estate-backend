@@ -232,11 +232,50 @@ class LeadsService:
             if v is not None
         }
 
+        return await self._create_captured_lead(
+            tenant,
+            contact,
+            listing_id=data.listing_id,
+            source=data.source,
+            source_meta=source_meta,
+            message=data.message,
+        )
+
+    async def register_signup_lead(self, tenant: TenantContext, email: str) -> Lead:
+        """Boundary for favorites' confirmed anonymous search signup (§8.9).
+        The double-opt-in confirm *is* the capture — same dedupe, scoring,
+        assignment and drip path, minus the form-level spam defense (the
+        consumed token already proved a live mailbox). Confirming the alert
+        subscription is the marketing-email consent being recorded."""
+        contact = await self.find_or_create_contact(
+            tenant.id, ContactCaptureIn(email=email, marketing_consent=True)
+        )
+        return await self._create_captured_lead(
+            tenant,
+            contact,
+            listing_id=None,
+            source=LeadSource.SEARCH_SIGNUP,
+            source_meta={},
+            message=None,
+        )
+
+    async def _create_captured_lead(
+        self,
+        tenant: TenantContext,
+        contact: Contact,
+        *,
+        listing_id: uuid.UUID | None,
+        source: LeadSource,
+        source_meta: dict[str, Any],
+        message: str | None,
+    ) -> Lead:
+        """The shared capture trunk: lead row → score → assignment engine →
+        activities → drip seed → post-commit speed-to-lead notification."""
         lead = Lead(
             tenant_id=tenant.id,
             contact_id=contact.id,
-            listing_id=data.listing_id,
-            source=data.source,
+            listing_id=listing_id,
+            source=source,
             source_meta=source_meta,
         )
         self.repo.add(lead)
@@ -245,14 +284,14 @@ class LeadsService:
         await self._recompute_score(tenant.id, lead)
         agent_id = await self.assign_lead(tenant, lead)
 
-        if data.message:
+        if message:
             self.repo.add(
                 LeadActivity(
                     tenant_id=tenant.id,
                     lead_id=lead.id,
                     actor_id=None,
                     type=ActivityType.NOTE,
-                    payload={"text": data.message, "via": "capture"},
+                    payload={"text": message, "via": "capture"},
                 )
             )
         if agent_id is not None:

@@ -197,10 +197,14 @@ class ListingRepository:
         sort: SearchSort,
         after: PublicKeyset | None,
         limit: int,
+        published_since: datetime | None = None,
     ) -> list[Listing]:
         """Public keyset page on (featured DESC, sort key, id DESC); returns
-        limit+1 rows. Featured leads every sort (§8.3 paid placement)."""
+        limit+1 rows. Featured leads every sort (§8.3 paid placement).
+        ``published_since`` is the saved-search digests' watermark (§8.9)."""
         stmt = self._published_filtered(tenant_id, filters, locale)
+        if published_since is not None:
+            stmt = stmt.where(Listing.published_at > published_since)
         key_col, key_desc = _sort_key(sort)
         if after is not None:
             after_featured, after_key, after_id = after
@@ -225,6 +229,36 @@ class ListingRepository:
             Listing.id.desc(),
         ).limit(limit + 1)
         return list((await self.session.execute(stmt)).scalars())
+
+    async def published_by_ids(
+        self, tenant_id: uuid.UUID, listing_ids: Collection[uuid.UUID]
+    ) -> list[Listing]:
+        """Currently-published rows among ``listing_ids`` — the favorites
+        dashboard's card join (§8.9); unpublished/deleted ids drop out."""
+        if not listing_ids:
+            return []
+        stmt = self._base(tenant_id).where(
+            Listing.status == ListingStatus.PUBLISHED, Listing.id.in_(list(listing_ids))
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def published_matches(
+        self,
+        tenant_id: uuid.UUID,
+        listing_id: uuid.UUID,
+        *,
+        filters: PublicListingFilters,
+        locale: str,
+    ) -> bool:
+        """Does one published listing satisfy a §8.3 filter set? The instant
+        saved-search matcher (§8.9) — same filter builder as the list, so the
+        two can never disagree on what "matches" means."""
+        stmt = (
+            self._published_filtered(tenant_id, filters, locale)
+            .where(Listing.id == listing_id)
+            .with_only_columns(func.count())
+        )
+        return (await self.session.execute(stmt)).scalar_one() > 0
 
     # ---- map (§8.3) ----
 
