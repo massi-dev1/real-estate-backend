@@ -55,10 +55,13 @@ class ContactCaptureIn(InputSchema):
         return self
 
 
-class LeadCaptureCreate(InputSchema):
+class _CaptureBase(InputSchema):
+    """Shared shape of every public capture form (§10.8 spam defense
+    included) — the classic form and the WhatsApp handoff differ only in how
+    the source is determined."""
+
     contact: ContactCaptureIn
     listing_id: uuid.UUID | None = None
-    source: LeadSource
     message: str | None = Field(default=None, max_length=2000)
     utm_source: str | None = Field(default=None, max_length=100)
     utm_medium: str | None = Field(default=None, max_length=100)
@@ -83,8 +86,22 @@ class LeadCaptureCreate(InputSchema):
         return self
 
 
+class LeadCaptureCreate(_CaptureBase):
+    source: LeadSource
+
+
+class WhatsAppClickCreate(_CaptureBase):
+    """The wa.me handoff (§8.6): source is fixed server-side
+    (``whatsapp_click``), everything else matches the classic capture form."""
+
+
 class LeadCaptureOut(OutSchema):
     id: uuid.UUID
+
+
+class WhatsAppClickOut(OutSchema):
+    id: uuid.UUID
+    whatsapp_url: str
 
 
 class ContactOut(OutSchema):

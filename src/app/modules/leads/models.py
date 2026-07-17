@@ -25,6 +25,7 @@ class LeadSource(enum.StrEnum):
     VALUATION = "valuation"
     SEARCH_SIGNUP = "search_signup"
     CHAT = "chat"
+    WHATSAPP_CLICK = "whatsapp_click"
     PHONE = "phone"
     PORTAL = "portal"
     AD = "ad"

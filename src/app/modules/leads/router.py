@@ -32,6 +32,8 @@ from app.modules.leads.schemas import (
     LeadOut,
     LeadUpdate,
     StageTransitionRequest,
+    WhatsAppClickCreate,
+    WhatsAppClickOut,
 )
 from app.modules.leads.service import LeadsServiceDep
 
@@ -57,6 +59,24 @@ async def capture_lead(
     # Honeypot hits: respond with a real-shaped id but persist nothing — a
     # bot gets no signal that anything was different about this submission.
     return LeadCaptureOut(id=lead.id if lead is not None else uuid.uuid4())
+
+
+@capture_router.post(
+    "/capture/whatsapp-click",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_capture_limit)],
+)
+async def capture_whatsapp_click(
+    data: WhatsAppClickCreate, tenant: TenantDep, service: LeadsServiceDep
+) -> WhatsAppClickOut:
+    """§8.6 wa.me handoff: the widget POSTs here on click, gets back the
+    prefilled deep link, and only then opens WhatsApp — the lead is in the
+    CRM before the conversation leaves our system."""
+    lead, whatsapp_url = await service.capture_whatsapp_click(tenant, data)
+    # Same honeypot camouflage as /capture: a real-shaped id, nothing persisted.
+    return WhatsAppClickOut(
+        id=lead.id if lead is not None else uuid.uuid4(), whatsapp_url=whatsapp_url
+    )
 
 
 portal_router = APIRouter(prefix="/portal", tags=["leads:portal"])

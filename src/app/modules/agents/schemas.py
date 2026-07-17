@@ -55,6 +55,10 @@ PHOTO_CONTENT_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png", "ima
 
 SLUG_PATTERN = r"^[a-z0-9]+(?:-[a-z0-9]+)*$"
 
+# E.164: leading +, up to 15 digits, no punctuation — the wa.me handoff
+# builds its URL from the digits, so the stored value must already be clean.
+E164_PATTERN = r"^\+[1-9]\d{6,14}$"
+
 
 def _validate_bio(value: I18nText | None) -> I18nText | None:
     if value is None:
@@ -124,6 +128,7 @@ class AgentProfileCreate(InputSchema):
     specialties: list[str] = Field(default_factory=list, max_length=len(AGENT_SPECIALTIES))
     service_areas: list[list[LonLat]] | None = Field(default=None)
     license_no: str | None = Field(default=None, max_length=100)
+    whatsapp_number: str | None = Field(default=None, pattern=E164_PATTERN)
     socials: dict[str, str] | None = None
 
     @field_validator("bio")
@@ -158,6 +163,7 @@ class AgentProfileUpdate(InputSchema):
     specialties: list[str] | None = Field(default=None, max_length=len(AGENT_SPECIALTIES))
     service_areas: list[list[LonLat]] | None = None
     license_no: str | None = Field(default=None, max_length=100)
+    whatsapp_number: str | None = Field(default=None, pattern=E164_PATTERN)
     socials: dict[str, str] | None = None
     is_published: bool | None = None
 
@@ -209,6 +215,7 @@ class AgentProfileOut(OutSchema):
     specialties: list[str]
     service_areas: list[list[LonLat]] | None
     license_no: str | None
+    whatsapp_number: str | None
     socials: dict[str, str]
     is_published: bool
     photo_status: PhotoStatus | None
@@ -229,6 +236,7 @@ class AgentProfileOut(OutSchema):
             specialties=profile.specialties,
             service_areas=multipolygon_rings(profile.service_areas),
             license_no=profile.license_no,
+            whatsapp_number=profile.whatsapp_number,
             socials=profile.socials,
             is_published=profile.is_published,
             photo_status=profile.photo_status,

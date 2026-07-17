@@ -16,15 +16,18 @@ see their own plus their team members' (membership via the agents module's
 boundary accessor); admins and marketing act tenant-wide.
 """
 
+import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
+from urllib.parse import quote
 
 import structlog
 from fastapi import Depends
 
 from app.core.database import SessionDep, on_commit
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
+from app.core.i18n import DEFAULT_LOCALE, pick_localized
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Role
 from app.core.tenancy import TenantContext
@@ -56,6 +59,8 @@ from app.modules.leads.schemas import (
     LeadOut,
     LeadUpdate,
     TimelineEntryOut,
+    WhatsAppClickCreate,
+    _CaptureBase,
 )
 from app.modules.listings.service import ListingService, get_listing_service
 from app.modules.users.service import UserService, get_user_service
@@ -79,6 +84,8 @@ _SOURCE_WEIGHT: dict[LeadSource, int] = {
     LeadSource.LISTING_FORM: 30,
     LeadSource.PORTAL: 25,
     LeadSource.VALUATION: 25,
+    # A wa.me click is warm intent — the visitor is opening a direct chat.
+    LeadSource.WHATSAPP_CLICK: 30,
     LeadSource.CHAT: 20,
     LeadSource.SEARCH_SIGNUP: 15,
     LeadSource.AD: 10,
@@ -220,26 +227,67 @@ class LeadsService:
         if data.listing_id is not None:
             await self.listings.get_public(tenant, str(data.listing_id))
 
-        source_meta = {
-            k: v
-            for k, v in {
-                "utm_source": data.utm_source,
-                "utm_medium": data.utm_medium,
-                "utm_campaign": data.utm_campaign,
-                "page": data.page,
-                "referrer": data.referrer,
-            }.items()
-            if v is not None
-        }
-
         return await self._create_captured_lead(
             tenant,
             contact,
             listing_id=data.listing_id,
             source=data.source,
-            source_meta=source_meta,
+            source_meta=_capture_source_meta(data),
             message=data.message,
         )
+
+    async def capture_whatsapp_click(
+        self, tenant: TenantContext, data: WhatsAppClickCreate
+    ) -> tuple[Lead | None, str]:
+        """The wa.me handoff (§8.6): log the click as a lead *before* the
+        visitor leaves for WhatsApp, then hand back the deep link. Number
+        resolution: the listing's assigned agent's ``whatsapp_number`` first,
+        the tenant's ``settings.contact.whatsapp_number`` second; neither
+        configured is a loud 409 — silently swallowing the click would lose
+        the lead's contact channel. Honeypot semantics mirror
+        :meth:`capture_lead`: ``(None, url)`` still carries a real URL so a
+        bot sees nothing different in the response."""
+        listing = None
+        if data.listing_id is not None:
+            listing = await self.listings.get_public(tenant, str(data.listing_id))
+
+        number: str | None = None
+        if listing is not None and listing.agent_id is not None:
+            number = await self.agents.whatsapp_number_for(tenant.id, listing.agent_id)
+        if number is None:
+            contact_settings: dict[str, Any] = tenant.settings.get("contact") or {}
+            raw = contact_settings.get("whatsapp_number")
+            number = raw if isinstance(raw, str) else None
+        # Agent numbers are schema-validated E.164, but the tenant-settings
+        # fallback is free-form JSONB — reduce to digits and treat anything
+        # empty as unconfigured rather than minting a dead wa.me link.
+        digits = re.sub(r"\D", "", number or "")
+        if not digits:
+            raise ConflictError("This agency has not configured a WhatsApp contact number.")
+
+        if listing is not None:
+            title = pick_localized(listing.title, DEFAULT_LOCALE)
+            prefill = f"Hello, I'm interested in listing {listing.reference_code}"
+            if title:
+                prefill += f" — {title}"
+        else:
+            prefill = "Hello, I'd like more information about your listings."
+        whatsapp_url = f"https://wa.me/{digits}?text={quote(prefill)}"
+
+        if data.hp:
+            logger.info("lead_capture_honeypot_triggered")
+            return None, whatsapp_url
+
+        contact = await self.find_or_create_contact(tenant.id, data.contact)
+        lead = await self._create_captured_lead(
+            tenant,
+            contact,
+            listing_id=data.listing_id,
+            source=LeadSource.WHATSAPP_CLICK,
+            source_meta=_capture_source_meta(data),
+            message=data.message,
+        )
+        return lead, whatsapp_url
 
     async def register_signup_lead(self, tenant: TenantContext, email: str) -> Lead:
         """Boundary for favorites' confirmed anonymous search signup (§8.9).
@@ -725,6 +773,20 @@ class LeadsService:
                 days=next_step["day"] - step["day"]
             )
         await self.repo.flush()
+
+
+def _capture_source_meta(data: _CaptureBase) -> dict[str, Any]:
+    return {
+        k: v
+        for k, v in {
+            "utm_source": data.utm_source,
+            "utm_medium": data.utm_medium,
+            "utm_campaign": data.utm_campaign,
+            "page": data.page,
+            "referrer": data.referrer,
+        }.items()
+        if v is not None
+    }
 
 
 def _decode_keyset(cursor: str) -> tuple[datetime, uuid.UUID]:

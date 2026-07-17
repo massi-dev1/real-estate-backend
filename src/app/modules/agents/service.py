@@ -165,6 +165,7 @@ class AgentsService:
                 to_multipolygon(data.service_areas) if data.service_areas else None
             ),
             license_no=data.license_no,
+            whatsapp_number=data.whatsapp_number,
             socials=data.socials or {},
         )
         self.repo.add(profile)
@@ -318,6 +319,15 @@ class AgentsService:
 
     async def has_territory_data(self, tenant_id: uuid.UUID) -> bool:
         return await self.repo.any_territory_profile(tenant_id)
+
+    async def whatsapp_number_for(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID
+    ) -> str | None:
+        """The agent's WhatsApp number (E.164) for leads' wa.me handoff —
+        ``None`` when the user has no profile or hasn't set one (the caller
+        falls back to the tenant-level default)."""
+        profile = await self.repo.get_by_user(tenant_id, user_id)
+        return profile.whatsapp_number if profile is not None else None
 
     async def scope_user_ids_for(
         self, tenant_id: uuid.UUID, actor: AuthenticatedUser

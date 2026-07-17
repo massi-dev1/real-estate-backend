@@ -62,6 +62,9 @@ class AgentProfile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Geometry(geometry_type="MULTIPOLYGON", srid=4326, spatial_index=False)
     )
     license_no: Mapped[str | None] = mapped_column(String(100))
+    # Destination for the public wa.me handoff (§8.6): E.164, validated in
+    # schemas. NULL falls back to tenant settings.contact.whatsapp_number.
+    whatsapp_number: Mapped[str | None] = mapped_column(String(20))
     socials: Mapped[dict[str, Any]] = mapped_column(
         default=dict, server_default=text("'{}'::jsonb")
     )
