@@ -19,6 +19,21 @@ from app.core.config import get_settings
 from app.core.database import create_engine, create_session_factory, set_tenant_guc
 
 
+def _run_with_current_app[T](coro: Awaitable[T]) -> T:
+    """Celery's "current app" lookup is thread-local: ``set_as_current`` only
+    pushed our app onto the main thread's stack, so a fresh worker thread
+    would otherwise fall back to an unconfigured default app — silently
+    dropping ``task_always_eager`` for any nested ``.delay()`` call (e.g. the
+    lead-drip sweep task emailing via ``send_email.delay()``). Imported
+    lazily (not at module scope) to dodge the circular import: celery_app
+    pulls in the task modules, which pull in this one.
+    """
+    from app.workers.celery_app import celery_app
+
+    celery_app.set_current()
+    return asyncio.run(coro)  # type: ignore[arg-type]
+
+
 def run_sync[T](coro: Awaitable[T]) -> T:
     """Run an awaitable from a sync Celery task body.
 
@@ -33,7 +48,7 @@ def run_sync[T](coro: Awaitable[T]) -> T:
     except RuntimeError:
         return asyncio.run(coro)  # type: ignore[arg-type]
     with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()  # type: ignore[arg-type]
+        return pool.submit(_run_with_current_app, coro).result()
 
 
 async def _scoped_transaction[T](

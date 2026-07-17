@@ -11,7 +11,8 @@ from datetime import datetime
 from sqlalchemy import ColumnElement, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.users.models import User
+from app.core.permissions import Role
+from app.modules.users.models import User, UserStatus
 
 
 def _tenant_clause(tenant_id: uuid.UUID | None) -> ColumnElement[bool]:
@@ -58,6 +59,21 @@ class UserRepository:
             _tenant_clause(tenant_id), User.deleted_at.is_(None)
         )
         return (await self.session.execute(stmt)).scalar_one()
+
+    async def list_active_by_role(self, tenant_id: uuid.UUID, role: Role) -> list[User]:
+        """Deterministic order (by id) so callers needing a stable pool —
+        e.g. round-robin lead assignment — get consistent tie-breaking."""
+        stmt = (
+            select(User)
+            .where(
+                User.tenant_id == tenant_id,
+                User.role == role,
+                User.status == UserStatus.ACTIVE,
+                User.deleted_at.is_(None),
+            )
+            .order_by(User.id)
+        )
+        return list((await self.session.execute(stmt)).scalars())
 
     def add(self, user: User) -> None:
         self.session.add(user)

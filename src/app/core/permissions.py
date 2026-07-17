@@ -47,6 +47,10 @@ class Permission(enum.StrEnum):
     USER_MANAGE = "user:manage"
     LISTING_MANAGE = "listing:manage"  # create/edit within the actor's scope
     LISTING_PUBLISH = "listing:publish"  # move listings into `published`
+    LEAD_MANAGE = "lead:manage"  # create/edit leads, contacts and activities within scope
+    LEAD_VIEW_ALL = "lead:view_all"  # tenant-wide read (managers, not just own leads)
+    LEAD_ASSIGN = "lead:assign"  # change the tenant's assignment policy — bigger blast
+    # radius than editing one lead, so kept separate from LEAD_MANAGE.
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -58,15 +62,33 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.SELLER: frozenset(),
     # Agents manage their own listings; publish rights come from the tenant's
     # `listings.agent_self_publish` setting, checked in the listings service.
-    Role.AGENT: frozenset({Permission.LISTING_MANAGE}),
-    Role.TEAM_LEAD: frozenset({Permission.LISTING_MANAGE, Permission.LISTING_PUBLISH}),
-    Role.MARKETING: frozenset({Permission.LISTING_MANAGE}),
+    Role.AGENT: frozenset({Permission.LISTING_MANAGE, Permission.LEAD_MANAGE}),
+    Role.TEAM_LEAD: frozenset(
+        {
+            Permission.LISTING_MANAGE,
+            Permission.LISTING_PUBLISH,
+            Permission.LEAD_MANAGE,
+            Permission.LEAD_VIEW_ALL,
+            Permission.LEAD_ASSIGN,
+        }
+    ),
+    Role.MARKETING: frozenset(
+        {
+            Permission.LISTING_MANAGE,
+            Permission.LEAD_MANAGE,
+            Permission.LEAD_VIEW_ALL,
+            Permission.LEAD_ASSIGN,
+        }
+    ),
     Role.ADMIN: frozenset(
         {
             Permission.USER_VIEW,
             Permission.USER_MANAGE,
             Permission.LISTING_MANAGE,
             Permission.LISTING_PUBLISH,
+            Permission.LEAD_MANAGE,
+            Permission.LEAD_VIEW_ALL,
+            Permission.LEAD_ASSIGN,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),

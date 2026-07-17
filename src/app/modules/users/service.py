@@ -133,6 +133,14 @@ class UserService:
     async def get(self, tenant_id: uuid.UUID | None, user_id: uuid.UUID) -> User:
         return await self._get_or_404(tenant_id, user_id)
 
+    # Defined before ``list`` on purpose: in the class body below that point,
+    # the bare name ``list`` resolves to the method, not the builtin, which
+    # breaks ``list[...]`` annotations.
+    async def list_active_agents(self, tenant_id: uuid.UUID) -> list[UserIdentity]:
+        """Active AGENT-role tenant users — the round-robin assignment pool."""
+        agents = await self.repo.list_active_by_role(tenant_id, Role.AGENT)
+        return [_to_identity(u) for u in agents]
+
     async def list(
         self, tenant_id: uuid.UUID | None, *, cursor: str | None, limit: int | None
     ) -> tuple[list[User], str | None, int]:

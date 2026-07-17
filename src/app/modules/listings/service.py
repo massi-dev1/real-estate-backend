@@ -340,6 +340,13 @@ class ListingService:
         await self._get_scoped_or_404(tenant.id, actor, listing_id)
         return await self.repo.history(tenant.id, listing_id)
 
+    async def agent_for(self, tenant_id: uuid.UUID, listing_id: uuid.UUID) -> uuid.UUID | None:
+        """The listing's assigned agent, if any — module-boundary accessor for
+        dependents (leads' ``listing_agent`` assignment strategy) that need
+        this one fact without an actor scope or a published-only filter."""
+        listing = await self.repo.get(tenant_id, listing_id)
+        return listing.agent_id if listing is not None else None
+
     # ---- public site ----
 
     async def get_public(self, tenant: TenantContext, ref_or_id: str) -> Listing:

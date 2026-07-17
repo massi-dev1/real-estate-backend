@@ -28,6 +28,10 @@ celery_app.conf.update(
         "app.workers.tasks.email.*": {"queue": "default"},
         "app.workers.tasks.listings.*": {"queue": "analytics"},
         "app.workers.tasks.media.*": {"queue": "media"},
+        # Not `analytics`: the sweep sends latency-sensitive lead-notification
+        # emails — the same class email.* already occupies. `analytics` is for
+        # pure-batch work with no human-facing side effect.
+        "app.workers.tasks.leads.*": {"queue": "default"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -47,5 +51,9 @@ celery_app.conf.beat_schedule = {
     "flag-stale-listings": {
         "task": "app.workers.tasks.listings.flag_stale_listings",
         "schedule": crontab(hour=3, minute=0),
+    },
+    "sweep-lead-drips-and-escalations": {
+        "task": "app.workers.tasks.leads.sweep_drips_and_escalations",
+        "schedule": crontab(minute="*/15"),
     },
 }

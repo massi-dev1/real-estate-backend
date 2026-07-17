@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     celery_result_backend: str = "redis://localhost:6379/2"
     # A published listing past this age is flagged stale for agent review (§8.1).
     listing_stale_after_days: int = 90
+    # Unassigned leads past this age get an admin-notifying escalation
+    # activity from the Beat sweep (§8.4) — never auto-reassigned.
+    lead_escalation_minutes: int = 30
 
     # Object storage (§8.2): S3-compatible, MinIO locally. Two buckets —
     # `media` holds processed public variants (served via CDN in prod),
