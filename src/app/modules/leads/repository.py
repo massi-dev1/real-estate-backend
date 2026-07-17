@@ -5,6 +5,7 @@ splitting into five classes would be ceremony without an isolation benefit.
 """
 
 import uuid
+from collections.abc import Collection
 from datetime import UTC, datetime
 from typing import Any
 
@@ -54,11 +55,11 @@ class LeadsRepository:
     # ---- leads ----
 
     def _lead_base(
-        self, tenant_id: uuid.UUID, *, scope_user_id: uuid.UUID | None = None
+        self, tenant_id: uuid.UUID, *, scope_user_ids: Collection[uuid.UUID] | None = None
     ) -> Select[tuple[Lead]]:
         stmt = select(Lead).where(Lead.tenant_id == tenant_id)
-        if scope_user_id is not None:
-            stmt = stmt.where(Lead.agent_id == scope_user_id)
+        if scope_user_ids is not None:
+            stmt = stmt.where(Lead.agent_id.in_(list(scope_user_ids)))
         return stmt
 
     async def get_lead(
@@ -66,10 +67,12 @@ class LeadsRepository:
         tenant_id: uuid.UUID,
         lead_id: uuid.UUID,
         *,
-        scope_user_id: uuid.UUID | None = None,
+        scope_user_ids: Collection[uuid.UUID] | None = None,
         for_update: bool = False,
     ) -> Lead | None:
-        stmt = self._lead_base(tenant_id, scope_user_id=scope_user_id).where(Lead.id == lead_id)
+        stmt = self._lead_base(tenant_id, scope_user_ids=scope_user_ids).where(
+            Lead.id == lead_id
+        )
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()
@@ -91,14 +94,16 @@ class LeadsRepository:
         self,
         tenant_id: uuid.UUID,
         *,
-        scope_user_id: uuid.UUID | None,
+        scope_user_ids: Collection[uuid.UUID] | None,
         filters: LeadFilters,
         contact_id: uuid.UUID | None = None,
         after: tuple[datetime, uuid.UUID] | None,
         limit: int,
     ) -> list[Lead]:
         """Keyset page on (created_at DESC, id DESC); returns limit+1 rows."""
-        stmt = self._apply_filters(self._lead_base(tenant_id, scope_user_id=scope_user_id), filters)
+        stmt = self._apply_filters(
+            self._lead_base(tenant_id, scope_user_ids=scope_user_ids), filters
+        )
         if contact_id is not None:
             stmt = stmt.where(Lead.contact_id == contact_id)
         if after is not None:
@@ -112,12 +117,42 @@ class LeadsRepository:
         return list((await self.session.execute(stmt)).scalars())
 
     async def count_leads(
-        self, tenant_id: uuid.UUID, *, scope_user_id: uuid.UUID | None, filters: LeadFilters
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        scope_user_ids: Collection[uuid.UUID] | None,
+        filters: LeadFilters,
     ) -> int:
         stmt = self._apply_filters(
-            self._lead_base(tenant_id, scope_user_id=scope_user_id), filters
+            self._lead_base(tenant_id, scope_user_ids=scope_user_ids), filters
         ).with_only_columns(func.count())
         return (await self.session.execute(stmt)).scalar_one()
+
+    async def stats_for_agent(
+        self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID
+    ) -> tuple[dict[str, int], float | None]:
+        """(leads-by-stage counts, avg first-response seconds) for one agent —
+        the §8.5 performance slice, two aggregate queries."""
+        by_stage_stmt = (
+            select(Lead.stage, func.count())
+            .where(Lead.tenant_id == tenant_id, Lead.agent_id == agent_user_id)
+            .group_by(Lead.stage)
+        )
+        rows = (await self.session.execute(by_stage_stmt)).all()
+        by_stage = {stage.value: count for stage, count in rows}
+
+        avg_stmt = select(
+            func.avg(
+                func.extract("epoch", Lead.first_response_at)
+                - func.extract("epoch", Lead.created_at)
+            )
+        ).where(
+            Lead.tenant_id == tenant_id,
+            Lead.agent_id == agent_user_id,
+            Lead.first_response_at.is_not(None),
+        )
+        avg_seconds = (await self.session.execute(avg_stmt)).scalar_one()
+        return by_stage, float(avg_seconds) if avg_seconds is not None else None
 
     async def open_lead_counts(
         self, tenant_id: uuid.UUID, agent_ids: list[uuid.UUID]

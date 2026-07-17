@@ -11,11 +11,9 @@ codebase's "modules call each other's service, not repository" rule. A
 future part can still carve out a slim ``clients`` module if a standalone
 contact/account portal materializes.
 
-Scoping model (§7.2): agents act on leads assigned to them; team leads,
-admins and marketing act tenant-wide (``team_lead`` getting *real*
-team-scoped visibility is deferred to §8.5, which introduces team
-membership — until then it shares the tenant-wide bucket, matching how
-listings already treats it).
+Scoping model (§7.2/§8.5): agents act on leads assigned to them; team leads
+see their own plus their team members' (membership via the agents module's
+boundary accessor); admins and marketing act tenant-wide.
 """
 
 import uuid
@@ -30,6 +28,7 @@ from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedEr
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Role
 from app.core.tenancy import TenantContext
+from app.modules.agents.service import AgentsService, build_agents_boundary
 from app.modules.leads.models import (
     ActivityType,
     AssignmentRule,
@@ -64,7 +63,11 @@ from app.workers.tasks.email import send_email
 
 logger = structlog.get_logger(__name__)
 
+# Manager-action gates (reassigning a lead); distinct from *visibility*.
 MANAGES_ALL_ROLES = frozenset({Role.ADMIN, Role.TEAM_LEAD, Role.MARKETING})
+# Tenant-wide visibility. TEAM_LEAD deliberately absent since §8.5: team leads
+# see their own leads plus their team members' — no longer the whole tenant.
+TENANT_WIDE_ROLES = frozenset({Role.ADMIN, Role.MARKETING})
 
 # Stages where a drip sequence keeps running — a real conversation underway
 # (qualified+) makes further automated nudges noise, or worse, a risk of
@@ -115,16 +118,30 @@ def _drip_sequence(tenant: TenantContext) -> list[dict[str, Any]]:
 
 
 class LeadsService:
-    def __init__(self, repo: LeadsRepository, users: UserService, listings: ListingService) -> None:
+    def __init__(
+        self,
+        repo: LeadsRepository,
+        users: UserService,
+        listings: ListingService,
+        agents: AgentsService,
+    ) -> None:
         self.repo = repo
         self.users = users
         self.listings = listings
+        self.agents = agents
 
     # ---- scoping helpers ----
 
-    @staticmethod
-    def _scope_for(actor: AuthenticatedUser) -> uuid.UUID | None:
-        return None if actor.role in MANAGES_ALL_ROLES else actor.id
+    async def _scope_for(
+        self, tenant_id: uuid.UUID, actor: AuthenticatedUser
+    ) -> set[uuid.UUID] | None:
+        """``None`` means tenant-wide; a user-id set narrows to assigned leads —
+        one id for an agent, self + team members for a team lead (§8.5)."""
+        if actor.role in TENANT_WIDE_ROLES:
+            return None
+        if actor.role is Role.TEAM_LEAD:
+            return {actor.id} | await self.agents.team_scope_user_ids(tenant_id, actor.id)
+        return {actor.id}
 
     async def _get_scoped_lead_or_404(
         self,
@@ -135,7 +152,10 @@ class LeadsService:
         for_update: bool = False,
     ) -> Lead:
         lead = await self.repo.get_lead(
-            tenant_id, lead_id, scope_user_id=self._scope_for(actor), for_update=for_update
+            tenant_id,
+            lead_id,
+            scope_user_ids=await self._scope_for(tenant_id, actor),
+            for_update=for_update,
         )
         if lead is None:
             # 404 for both "doesn't exist" and "not yours" — no existence oracle.
@@ -289,11 +309,45 @@ class LeadsService:
                         agent_id = listing_agent
         elif strategy is AssignmentStrategy.ROUND_ROBIN:
             agent_id = await self._pick_round_robin(tenant.id, config)
-        # territory is rejected at the assignment_rules write boundary
-        # (update_assignment_rule) — never reached here.
+        elif strategy is AssignmentStrategy.TERRITORY:
+            agent_id = await self._pick_territory(tenant, lead, config)
 
         lead.agent_id = agent_id
         return agent_id
+
+    async def _pick_territory(
+        self, tenant: TenantContext, lead: Lead, config: dict[str, Any]
+    ) -> uuid.UUID | None:
+        """Point-in-polygon over published profiles' ``service_areas`` (§8.5);
+        ties broken least-loaded like round-robin (same accepted best-effort
+        concurrency stance). Leads without a listing point stay unassigned —
+        the >30-min escalation sweep already covers those."""
+        if lead.listing_id is None:
+            return None
+        point = await self.listings.point_for(tenant.id, lead.listing_id)
+        if point is None:
+            return None
+        lon, lat = point
+        candidate_ids = await self.agents.candidates_for_point(tenant.id, lon, lat)
+        candidates: list[uuid.UUID] = []
+        for candidate_id in candidate_ids:
+            # Re-validated: the agent may have been disabled since.
+            identity = await self.users.get_identity_if_active(tenant.id, candidate_id)
+            if identity is not None:
+                candidates.append(identity.id)
+        if not candidates:
+            return None
+        max_open = config.get("max_open_leads_per_agent")
+        counts = await self.repo.open_lead_counts(tenant.id, candidates)
+        best_id: uuid.UUID | None = None
+        best_count: int | None = None
+        for candidate_id in candidates:
+            count = counts.get(candidate_id, 0)
+            if max_open is not None and count >= max_open:
+                continue
+            if best_count is None or count < best_count:
+                best_id, best_count = candidate_id, count
+        return best_id
 
     async def _pick_round_robin(
         self, tenant_id: uuid.UUID, config: dict[str, Any]
@@ -334,12 +388,14 @@ class LeadsService:
     async def update_assignment_rule(
         self, tenant: TenantContext, strategy: AssignmentStrategy, config: AssignmentRuleConfig
     ) -> AssignmentRule:
-        if strategy is AssignmentStrategy.TERRITORY:
-            # No agent_profiles/service_areas data exists yet (§8.5 not
-            # built) — reject at the write boundary rather than accepting a
+        if strategy is AssignmentStrategy.TERRITORY and not (
+            await self.agents.has_territory_data(tenant.id)
+        ):
+            # Same fail-early stance as before §8.5 existed: don't accept a
             # policy that can never actually match an agent.
             raise ConflictError(
-                "Territory-based assignment is not yet supported for this tenant."
+                "Territory-based assignment needs at least one published agent "
+                "profile with service areas."
             )
         return await self.repo.upsert_assignment_rule(
             tenant.id, strategy=strategy, config=config.model_dump(mode="json", exclude_none=True)
@@ -422,9 +478,9 @@ class LeadsService:
     ) -> tuple[list[Lead], str | None, int]:
         page_size = clamp_limit(limit)
         after = _decode_keyset(cursor) if cursor else None
-        scope = self._scope_for(actor)
+        scope = await self._scope_for(tenant.id, actor)
         rows = await self.repo.list_leads(
-            tenant.id, scope_user_id=scope, filters=filters, after=after, limit=page_size
+            tenant.id, scope_user_ids=scope, filters=filters, after=after, limit=page_size
         )
         items = rows[:page_size]
         next_cursor = None
@@ -433,7 +489,7 @@ class LeadsService:
             next_cursor = encode_cursor(
                 {"created_at": last.created_at.isoformat(), "id": str(last.id)}
             )
-        total = await self.repo.count_leads(tenant.id, scope_user_id=scope, filters=filters)
+        total = await self.repo.count_leads(tenant.id, scope_user_ids=scope, filters=filters)
         return items, next_cursor, total
 
     async def update(
@@ -570,13 +626,13 @@ class LeadsService:
         self, tenant: TenantContext, actor: AuthenticatedUser, contact_id: uuid.UUID
     ) -> ContactTimelineOut:
         contact = await self.get_contact(tenant, actor, contact_id)
-        scope = self._scope_for(actor)
+        scope = await self._scope_for(tenant.id, actor)
         # Ownership scoping applies here too: contacts aren't agent-owned,
         # leads are — an agent viewing a shared contact sees only their own
         # leads (and activity) against it, not a colleague's history.
         leads = await self.repo.list_leads(
             tenant.id,
-            scope_user_id=scope,
+            scope_user_ids=scope,
             filters=LeadFilters(),
             contact_id=contact_id,
             after=None,
@@ -607,6 +663,14 @@ class LeadsService:
             leads=[LeadOut.model_validate(lead) for lead in leads],
             entries=entries,
         )
+
+    # ---- boundary accessors (agents' §8.5 stats) ----
+
+    async def stats_for_agent(
+        self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID
+    ) -> tuple[dict[str, int], float | None]:
+        """(leads-by-stage, avg first-response seconds) for one agent."""
+        return await self.repo.stats_for_agent(tenant_id, agent_user_id)
 
     # ---- drip advancement (called from the Beat task) ----
 
@@ -648,7 +712,10 @@ def _decode_keyset(cursor: str) -> tuple[datetime, uuid.UUID]:
 
 def get_leads_service(session: SessionDep) -> LeadsService:
     return LeadsService(
-        LeadsRepository(session), get_user_service(session), get_listing_service(session)
+        LeadsRepository(session),
+        get_user_service(session),
+        get_listing_service(session),
+        build_agents_boundary(session),
     )
 
 

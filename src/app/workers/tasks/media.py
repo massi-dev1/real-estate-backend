@@ -14,12 +14,9 @@ Validation failures mark the row ``failed`` and delete the original — they
 never retry. Only infrastructure errors (storage/DB down) retry.
 """
 
-import hashlib
 import uuid
 from typing import Any
 
-import blurhash
-import pyvips
 import structlog
 from botocore.exceptions import ClientError
 from celery import shared_task
@@ -27,84 +24,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.storage import ObjectStorage, create_storage
+from app.core.storage import create_storage
 from app.modules.media.models import ListingMedia, MediaStatus
 from app.workers.db import run_scoped
+from app.workers.tasks.images import MediaValidationError, derive_variants, verify_magic
 
 logger = structlog.get_logger(__name__)
 
 VARIANT_WIDTHS = {"thumb": 320, "card": 640, "gallery": 1280, "full": 1920}
-_FORMATS = (("webp", ".webp", "image/webp"), ("jpeg", ".jpg", "image/jpeg"))
-
-# content type → (magic offset, magic bytes) — everything MEDIA_CONTENT_TYPES allows.
-_MAGIC: dict[str, list[tuple[int, bytes]]] = {
-    "image/jpeg": [(0, b"\xff\xd8\xff")],
-    "image/png": [(0, b"\x89PNG\r\n\x1a\n")],
-    "image/webp": [(0, b"RIFF"), (8, b"WEBP")],
-    "application/pdf": [(0, b"%PDF")],
-}
-
-
-class MediaValidationError(Exception):
-    """The uploaded object is not what was declared — permanent, never retried."""
-
-
-def _verify_magic(data: bytes, content_type: str) -> None:
-    signatures = _MAGIC.get(content_type)
-    if signatures is None:
-        raise MediaValidationError("unsupported content type")
-    for offset, magic in signatures:
-        if data[offset : offset + len(magic)] != magic:
-            raise MediaValidationError("file bytes do not match the declared content type")
-
-
-def _blurhash_of(image: pyvips.Image) -> str:
-    """Blurhash from a tiny render — pixel lists are fine at 32px wide."""
-    small = image.thumbnail_image(32)
-    if small.bands > 3:
-        small = small.flatten(background=[255, 255, 255])
-    if small.bands < 3:
-        small = small.colourspace("srgb")
-    mem = bytes(small.write_to_memory())
-    width, height, bands = small.width, small.height, small.bands
-    pixels = [
-        [
-            [mem[(row * width + col) * bands + band] for band in range(3)]
-            for col in range(width)
-        ]
-        for row in range(height)
-    ]
-    return str(blurhash.encode(pixels, components_x=4, components_y=3, linear=False))
-
-
-def _derive_variants(
-    original: bytes, key_prefix: str, storage: ObjectStorage
-) -> tuple[dict[str, Any], str]:
-    """Generate + upload all variants; returns (variants JSONB, blurhash)."""
-    try:
-        # thumbnail auto-rotates from EXIF orientation before we strip it.
-        probe = pyvips.Image.thumbnail_buffer(original, VARIANT_WIDTHS["full"], size="down")
-    except pyvips.Error as exc:
-        raise MediaValidationError("file could not be decoded as an image") from exc
-
-    blur = _blurhash_of(probe)
-    variants: dict[str, Any] = {}
-    for name, width in VARIANT_WIDTHS.items():
-        # copy_memory(): thumbnail output is a sequential pipeline that can be
-        # read once — saving it twice (WebP + JPEG) needs a materialized image.
-        image = pyvips.Image.thumbnail_buffer(original, width, size="down").copy_memory()
-        for fmt, extension, mime in _FORMATS:
-            # keep="none" drops every metadata block — EXIF GPS included (§8.2).
-            buf = bytes(image.write_to_buffer(extension, Q=82, keep="none"))
-            digest = hashlib.sha256(buf).hexdigest()[:12]
-            key = f"{key_prefix}/{digest}-{name}{extension}"
-            storage.put_object(storage.media_bucket, key, buf, mime)
-            variants[f"{name}_{fmt}"] = {
-                "key": key,
-                "width": image.width,
-                "height": image.height,
-            }
-    return variants, blur
 
 
 async def _load_media(session: AsyncSession, media_id: uuid.UUID) -> ListingMedia | None:
@@ -155,13 +82,15 @@ def process_media(media_id: str, tenant_id: str) -> str:
                 raise MediaValidationError("no uploaded file found for this media") from exc
             raise  # infrastructure problem — let Celery retry
 
-        _verify_magic(original, content_type)
+        verify_magic(original, content_type)
 
         variants: dict[str, Any] = {}
         blur: str | None = None
         if content_type != "application/pdf":
             key_prefix = f"tenants/{tenant_id}/listings/{listing_id}/{media_id}"
-            variants, blur = _derive_variants(original, key_prefix, storage)
+            variants, blur = derive_variants(
+                original, key_prefix, storage, widths=VARIANT_WIDTHS
+            )
     except MediaValidationError as exc:
         reason = str(exc)
         storage.delete_objects(storage.docs_bucket, [storage_key])

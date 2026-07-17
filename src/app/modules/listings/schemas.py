@@ -13,10 +13,10 @@ from typing import Annotated, Any, Self
 
 from pydantic import Field, PrivateAttr, field_validator, model_validator
 
+from app.common.geo import point_lonlat
 from app.core.i18n import SUPPORTED_LOCALES, pick_localized
 from app.core.pagination import MAX_PAGE_SIZE
 from app.core.schema import BaseSchema, InputSchema, OutSchema
-from app.modules.listings.geo import point_lonlat
 from app.modules.listings.models import (
     Listing,
     ListingPurpose,

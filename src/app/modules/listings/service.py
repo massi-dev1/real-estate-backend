@@ -1,10 +1,11 @@
 """Listings business logic: reference codes, ownership scoping, the publishing
 workflow (§8.1), and locale-negotiated public output.
 
-Scoping model (§7.2): agents act on listings they own (assigned or created);
-team leads, admins and marketing act tenant-wide. Publishing additionally
-needs ``LISTING_PUBLISH`` — or, for agents, the tenant's
-``settings.listings.agent_self_publish`` flag.
+Scoping model (§7.2/§8.5): agents act on listings they own (assigned or
+created); team leads see their own plus their team members' (membership via
+the agents module's boundary accessor); admins and marketing act tenant-wide.
+Publishing additionally needs ``LISTING_PUBLISH`` — or, for agents, the
+tenant's ``settings.listings.agent_self_publish`` flag.
 """
 
 import uuid
@@ -16,12 +17,13 @@ import structlog
 from fastapi import Depends
 from sqlalchemy import Row
 
+from app.common.geo import LonLat, point_lonlat, to_point
 from app.core.database import SessionDep
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Permission, Role
 from app.core.tenancy import TenantContext
-from app.modules.listings.geo import to_point
+from app.modules.agents.service import AgentsService, build_agents_boundary
 from app.modules.listings.models import (
     Listing,
     ListingStatus,
@@ -47,8 +49,13 @@ MAP_PIN_LIMIT = 500
 # with the content part if any tenant outgrows this.
 SITEMAP_MAX_URLS = 50_000
 
-# Roles whose LISTING_MANAGE covers the whole tenant, not just their own rows.
+# Roles whose LISTING_MANAGE covers the whole tenant, not just their own rows
+# (manager-action gates: featuring, reassigning, unassigning).
 MANAGES_ALL_ROLES = frozenset({Role.ADMIN, Role.TEAM_LEAD, Role.MARKETING})
+# Roles whose *visibility* is tenant-wide. TEAM_LEAD deliberately absent since
+# §8.5: team leads see their own rows plus their team members' — real
+# team-scoped visibility, not the tenant-wide bucket they shared before.
+TENANT_WIDE_ROLES = frozenset({Role.ADMIN, Role.MARKETING})
 
 # The workflow graph (§8.1). `archived → draft` is the relist path.
 ALLOWED_TRANSITIONS: dict[ListingStatus, frozenset[ListingStatus]] = {
@@ -81,16 +88,25 @@ def _reference_prefix(slug: str) -> str:
 
 
 class ListingService:
-    def __init__(self, repo: ListingRepository, users: UserService) -> None:
+    def __init__(
+        self, repo: ListingRepository, users: UserService, agents: AgentsService
+    ) -> None:
         self.repo = repo
         self.users = users
+        self.agents = agents
 
     # ---- scoping helpers ----
 
-    @staticmethod
-    def _scope_for(actor: AuthenticatedUser) -> uuid.UUID | None:
-        """``None`` means tenant-wide; a user id narrows to owned listings."""
-        return None if actor.role in MANAGES_ALL_ROLES else actor.id
+    async def _scope_for(
+        self, tenant_id: uuid.UUID, actor: AuthenticatedUser
+    ) -> set[uuid.UUID] | None:
+        """``None`` means tenant-wide; a user-id set narrows to owned listings —
+        one id for an agent, self + team members for a team lead (§8.5)."""
+        if actor.role in TENANT_WIDE_ROLES:
+            return None
+        if actor.role is Role.TEAM_LEAD:
+            return {actor.id} | await self.agents.team_scope_user_ids(tenant_id, actor.id)
+        return {actor.id}
 
     async def _get_scoped_or_404(
         self,
@@ -101,7 +117,10 @@ class ListingService:
         for_update: bool = False,
     ) -> Listing:
         listing = await self.repo.get(
-            tenant_id, listing_id, scope_user_id=self._scope_for(actor), for_update=for_update
+            tenant_id,
+            listing_id,
+            scope_user_ids=await self._scope_for(tenant_id, actor),
+            for_update=for_update,
         )
         if listing is None:
             # 404 for both "doesn't exist" and "not yours" — no existence oracle.
@@ -228,9 +247,9 @@ class ListingService:
     ) -> tuple[list[Listing], str | None, int]:
         page_size = clamp_limit(limit)
         after = _decode_keyset(cursor, "created_at") if cursor else None
-        scope = self._scope_for(actor)
+        scope = await self._scope_for(tenant.id, actor)
         rows = await self.repo.list_portal(
-            tenant.id, scope_user_id=scope, status=status, after=after, limit=page_size
+            tenant.id, scope_user_ids=scope, status=status, after=after, limit=page_size
         )
         items = rows[:page_size]
         next_cursor = None
@@ -239,7 +258,7 @@ class ListingService:
             next_cursor = encode_cursor(
                 {"created_at": last.created_at.isoformat(), "id": str(last.id)}
             )
-        total = await self.repo.count(tenant.id, scope_user_id=scope, status=status)
+        total = await self.repo.count(tenant.id, scope_user_ids=scope, status=status)
         return items, next_cursor, total
 
     async def soft_delete(
@@ -347,6 +366,24 @@ class ListingService:
         listing = await self.repo.get(tenant_id, listing_id)
         return listing.agent_id if listing is not None else None
 
+    async def point_for(self, tenant_id: uuid.UUID, listing_id: uuid.UUID) -> LonLat | None:
+        """The listing's (lon, lat), if it has one — boundary accessor for
+        leads' territory assignment (§8.4)."""
+        listing = await self.repo.get(tenant_id, listing_id)
+        return point_lonlat(listing.location) if listing is not None else None
+
+    async def counts_by_status_for_agent(
+        self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID
+    ) -> dict[ListingStatus, int]:
+        """Per-status listing counts for one agent — the §8.5 stats slice."""
+        return await self.repo.counts_by_status_for_agent(tenant_id, agent_user_id)
+
+    async def public_by_agent(
+        self, tenant: TenantContext, agent_user_id: uuid.UUID, *, limit: int
+    ) -> list[Listing]:
+        """Published listings assigned to an agent — the public profile page."""
+        return await self.repo.list_published_by_agent(tenant.id, agent_user_id, limit=limit)
+
     # ---- public site ----
 
     async def get_public(self, tenant: TenantContext, ref_or_id: str) -> Listing:
@@ -450,7 +487,9 @@ def _decode_keyset(cursor: str, ts_field: str) -> tuple[datetime, uuid.UUID]:
 
 
 def get_listing_service(session: SessionDep) -> ListingService:
-    return ListingService(ListingRepository(session), get_user_service(session))
+    return ListingService(
+        ListingRepository(session), get_user_service(session), build_agents_boundary(session)
+    )
 
 
 ListingServiceDep = Annotated[ListingService, Depends(get_listing_service)]

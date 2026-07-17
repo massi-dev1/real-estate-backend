@@ -75,6 +75,19 @@ class UserRepository:
         )
         return list((await self.session.execute(stmt)).scalars())
 
+    async def list_active_by_ids(
+        self, tenant_id: uuid.UUID, user_ids: list[uuid.UUID]
+    ) -> list[User]:
+        if not user_ids:
+            return []
+        stmt = select(User).where(
+            User.tenant_id == tenant_id,
+            User.id.in_(user_ids),
+            User.status == UserStatus.ACTIVE,
+            User.deleted_at.is_(None),
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
     def add(self, user: User) -> None:
         self.session.add(user)
 

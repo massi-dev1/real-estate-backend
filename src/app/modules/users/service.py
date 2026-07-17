@@ -33,6 +33,15 @@ class UserIdentity:
     role: Role
     locale: str
     email_verified_at: datetime | None
+    first_name: str | None = None
+    last_name: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        """Public-facing name; falls back to the email local part rather than
+        showing an empty card (agent directory, §8.5)."""
+        parts = [p for p in (self.first_name, self.last_name) if p]
+        return " ".join(parts) if parts else self.email.split("@", 1)[0]
 
 
 def _to_identity(user: User) -> UserIdentity:
@@ -43,6 +52,8 @@ def _to_identity(user: User) -> UserIdentity:
         role=user.role,
         locale=user.locale,
         email_verified_at=user.email_verified_at,
+        first_name=user.first_name,
+        last_name=user.last_name,
     )
 
 
@@ -140,6 +151,14 @@ class UserService:
         """Active AGENT-role tenant users — the round-robin assignment pool."""
         agents = await self.repo.list_active_by_role(tenant_id, Role.AGENT)
         return [_to_identity(u) for u in agents]
+
+    async def identities_for(
+        self, tenant_id: uuid.UUID, user_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, UserIdentity]:
+        """Batch identity lookup (active users only) — one query, for callers
+        joining display names onto a page of rows (agent directory)."""
+        users = await self.repo.list_active_by_ids(tenant_id, user_ids)
+        return {u.id: _to_identity(u) for u in users}
 
     async def list(
         self, tenant_id: uuid.UUID | None, *, cursor: str | None, limit: int | None

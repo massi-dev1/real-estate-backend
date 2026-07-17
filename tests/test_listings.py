@@ -51,9 +51,13 @@ async def add_user(
     *,
     email: str | None = None,
     host: str = HOST_A,
+    existing: bool = False,
 ) -> dict[str, str]:
+    """Login headers for a tenant user, creating the account first unless the
+    caller already made it (``existing=True``, when it needs the user's id)."""
     email = email or f"{role.value}@a.example.com"
-    await create_tenant_user(tenant_id, email, role)
+    if not existing:
+        await create_tenant_user(tenant_id, email, role)
     resp = await login_user(client, host, email, FIXTURE_PASSWORD)
     assert resp.status_code == 200, resp.text
     return {"Host": host, "Authorization": bearer(resp)}
@@ -277,16 +281,52 @@ async def test_agent_publish_gated_by_tenant_setting(
     assert (await transition(client, agent, listing["id"], "published")).status_code == 200
 
 
-async def test_team_lead_publishes_for_agents(
+async def make_team_with(
+    client: AsyncClient,
+    admin: dict[str, str],
+    lead_user_id: str,
+    member_ids: list[str],
+) -> dict[str, Any]:
+    """Admin creates a team and adds members — §8.5 membership is what gives a
+    team_lead visibility over the members' listings and leads."""
+    resp = await client.post(
+        "/api/v1/portal/teams",
+        json={"name": "Team", "leadUserId": lead_user_id},
+        headers=admin,
+    )
+    assert resp.status_code == 201, resp.text
+    team = dict(resp.json())
+    for member_id in member_ids:
+        added = await client.post(
+            f"/api/v1/portal/teams/{team['id']}/members",
+            json={"userId": member_id},
+            headers=admin,
+        )
+        assert added.status_code == 201, added.text
+    return team
+
+
+async def test_team_lead_publishes_for_their_team_agents(
     client: AsyncClient,
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, agent = await tenant_and_login(client, platform_headers, create_tenant_user, Role.AGENT)
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    tid = str(tenant["id"])
+    agent_id = await create_tenant_user(tid, "agent@a.example.com", Role.AGENT)
+    lead_id = await create_tenant_user(tid, "lead@a.example.com", Role.TEAM_LEAD)
+    agent = await add_user(
+        client, create_tenant_user, tid, Role.AGENT, email="agent@a.example.com", existing=True
+    )
     lead = await add_user(
-        client, create_tenant_user, str(tenant["id"]), Role.TEAM_LEAD, email="lead@a.example.com"
+        client, create_tenant_user, tid, Role.TEAM_LEAD, email="lead@a.example.com", existing=True
     )
     listing = await make_listing(client, agent)
+
+    # Since §8.5 a team lead only reaches listings inside their team: without
+    # membership the transition is a scoped 404, with it a 200.
+    assert (await transition(client, lead, listing["id"], "published")).status_code == 404
+    await make_team_with(client, admin, str(lead_id), [str(agent_id)])
     assert (await transition(client, lead, listing["id"], "published")).status_code == 200
 
 
@@ -304,6 +344,10 @@ async def test_agents_are_scoped_to_their_own_listings(
     agent_two = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="agent2@a.example.com"
     )
+    admin = await add_user(
+        client, create_tenant_user, str(tenant["id"]), Role.ADMIN, email="admin@a.example.com"
+    )
+    # A team lead with no team sees only their own rows since §8.5.
     lead = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.TEAM_LEAD, email="lead@a.example.com"
     )
@@ -317,8 +361,8 @@ async def test_agents_are_scoped_to_their_own_listings(
     assert (await client.delete(url, headers=agent_two)).status_code == 404
     assert (await transition(client, agent_two, mine["id"], "review")).status_code == 404
 
-    # Lists: owner and lead see it, the other agent doesn't.
-    for headers, expected in ((agent_one, 1), (agent_two, 0), (lead, 1)):
+    # Lists: owner and admin see it; the other agent and the teamless lead don't.
+    for headers, expected in ((agent_one, 1), (agent_two, 0), (lead, 0), (admin, 1)):
         listed = await client.get("/api/v1/portal/listings", headers=headers)
         assert listed.status_code == 200
         assert len(listed.json()["items"]) == expected

@@ -51,6 +51,8 @@ class Permission(enum.StrEnum):
     LEAD_VIEW_ALL = "lead:view_all"  # tenant-wide read (managers, not just own leads)
     LEAD_ASSIGN = "lead:assign"  # change the tenant's assignment policy — bigger blast
     # radius than editing one lead, so kept separate from LEAD_MANAGE.
+    AGENT_MANAGE = "agent:manage"  # manage any agent profile + teams; admins and
+    # team leads (leads are further ownership-checked to *their* team in the service).
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -70,6 +72,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_MANAGE,
             Permission.LEAD_VIEW_ALL,
             Permission.LEAD_ASSIGN,
+            Permission.AGENT_MANAGE,
         }
     ),
     Role.MARKETING: frozenset(
@@ -89,6 +92,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_MANAGE,
             Permission.LEAD_VIEW_ALL,
             Permission.LEAD_ASSIGN,
+            Permission.AGENT_MANAGE,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),

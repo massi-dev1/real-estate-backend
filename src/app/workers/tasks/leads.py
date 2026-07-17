@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.permissions import Role
 from app.core.tenancy import TenantContext
+from app.modules.agents.service import build_agents_boundary
 from app.modules.leads.models import ActivityType, Lead, LeadActivity, LeadStage
 from app.modules.leads.repository import LeadsRepository
 from app.modules.leads.service import LeadsService
@@ -53,7 +54,10 @@ async def _advance_drips(session: AsyncSession, tenant: Tenant, now: datetime) -
     context = _to_context(tenant)
     repo = LeadsRepository(session)
     users = UserService(UserRepository(session))
-    service = LeadsService(repo, users, ListingService(ListingRepository(session), users))
+    agents = build_agents_boundary(session)
+    service = LeadsService(
+        repo, users, ListingService(ListingRepository(session), users, agents), agents
+    )
     due = await repo.list_due_drips(tenant.id, now=now, limit=200)
     for drip in due:
         await service.advance_drip(context, drip)

@@ -16,6 +16,9 @@ from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddlew
 from app.core.storage import create_storage
 from app.core.tenancy import TenantResolutionMiddleware
 from app.health import router as health_router
+from app.modules.agents.router import portal_router as agents_portal_router
+from app.modules.agents.router import public_router as agents_public_router
+from app.modules.agents.router import teams_router
 from app.modules.auth.router import auth_router, platform_auth_router
 from app.modules.leads.router import capture_router as leads_capture_router
 from app.modules.leads.router import portal_router as leads_portal_router
@@ -65,6 +68,9 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(media_portal_router)
     router.include_router(leads_capture_router)
     router.include_router(leads_portal_router)
+    router.include_router(agents_public_router)
+    router.include_router(agents_portal_router)
+    router.include_router(teams_router)
     return router
 
 

@@ -28,6 +28,8 @@ celery_app.conf.update(
         "app.workers.tasks.email.*": {"queue": "default"},
         "app.workers.tasks.listings.*": {"queue": "analytics"},
         "app.workers.tasks.media.*": {"queue": "media"},
+        # Agent photo processing is the same CPU profile as listing media.
+        "app.workers.tasks.agents.*": {"queue": "media"},
         # Not `analytics`: the sweep sends latency-sensitive lead-notification
         # emails — the same class email.* already occupies. `analytics` is for
         # pure-batch work with no human-facing side effect.

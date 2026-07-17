@@ -14,7 +14,9 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Import every module's models so their tables register on Base.metadata.
+import app.modules.agents.models
 import app.modules.auth.models
+import app.modules.leads.models
 import app.modules.listings.models
 import app.modules.media.models
 import app.modules.tenants.models

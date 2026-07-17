@@ -1,11 +1,13 @@
 """DB access for listings. Every method takes ``tenant_id`` (golden rule §5);
-ownership scoping (§7.2) is a repository concern too: ``scope_user_id`` narrows
-queries to listings an agent owns (assigned or created).
+ownership scoping (§7.2) is a repository concern too: ``scope_user_ids``
+narrows queries to listings owned (assigned or created) by any of the given
+users — one id for an agent, self + team members for a team lead (§8.5).
 """
 
 import contextlib
 import math
 import uuid
+from collections.abc import Collection
 from datetime import datetime
 from typing import Any
 
@@ -60,12 +62,13 @@ class ListingRepository:
         self.session = session
 
     def _base(
-        self, tenant_id: uuid.UUID, *, scope_user_id: uuid.UUID | None = None
+        self, tenant_id: uuid.UUID, *, scope_user_ids: Collection[uuid.UUID] | None = None
     ) -> Select[tuple[Listing]]:
         stmt = select(Listing).where(Listing.tenant_id == tenant_id, Listing.deleted_at.is_(None))
-        if scope_user_id is not None:
+        if scope_user_ids is not None:
+            ids = list(scope_user_ids)
             stmt = stmt.where(
-                or_(Listing.agent_id == scope_user_id, Listing.created_by == scope_user_id)
+                or_(Listing.agent_id.in_(ids), Listing.created_by.in_(ids))
             )
         return stmt
 
@@ -74,13 +77,15 @@ class ListingRepository:
         tenant_id: uuid.UUID,
         listing_id: uuid.UUID,
         *,
-        scope_user_id: uuid.UUID | None = None,
+        scope_user_ids: Collection[uuid.UUID] | None = None,
         for_update: bool = False,
     ) -> Listing | None:
         """``for_update`` locks the row — required by every read-validate-write
         flow (workflow transitions, delete) so concurrent requests re-validate
         against the committed state instead of a stale read."""
-        stmt = self._base(tenant_id, scope_user_id=scope_user_id).where(Listing.id == listing_id)
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).where(
+            Listing.id == listing_id
+        )
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()
@@ -101,13 +106,13 @@ class ListingRepository:
         self,
         tenant_id: uuid.UUID,
         *,
-        scope_user_id: uuid.UUID | None,
+        scope_user_ids: Collection[uuid.UUID] | None,
         status: ListingStatus | None,
         after: tuple[datetime, uuid.UUID] | None,
         limit: int,
     ) -> list[Listing]:
         """Keyset page on (created_at DESC, id DESC); returns limit+1 rows."""
-        stmt = self._base(tenant_id, scope_user_id=scope_user_id)
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids)
         if status is not None:
             stmt = stmt.where(Listing.status == status)
         if after is not None:
@@ -282,21 +287,47 @@ class ListingRepository:
         self,
         tenant_id: uuid.UUID,
         *,
-        scope_user_id: uuid.UUID | None = None,
+        scope_user_ids: Collection[uuid.UUID] | None = None,
         status: ListingStatus | None = None,
     ) -> int:
-        stmt = (
-            select(func.count())
-            .select_from(Listing)
-            .where(Listing.tenant_id == tenant_id, Listing.deleted_at.is_(None))
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).with_only_columns(
+            func.count()
         )
-        if scope_user_id is not None:
-            stmt = stmt.where(
-                or_(Listing.agent_id == scope_user_id, Listing.created_by == scope_user_id)
-            )
         if status is not None:
             stmt = stmt.where(Listing.status == status)
         return (await self.session.execute(stmt)).scalar_one()
+
+    async def list_published_by_agent(
+        self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID, *, limit: int
+    ) -> list[Listing]:
+        """A public agent profile's active listings (§8.5) — assigned only
+        (``created_by`` is back-office provenance, not public attribution)."""
+        stmt = (
+            self._base(tenant_id)
+            .where(
+                Listing.status == ListingStatus.PUBLISHED, Listing.agent_id == agent_user_id
+            )
+            .order_by(
+                Listing.featured.desc(), Listing.published_at.desc(), Listing.id.desc()
+            )
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def counts_by_status_for_agent(
+        self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID
+    ) -> dict[ListingStatus, int]:
+        stmt = (
+            select(Listing.status, func.count())
+            .where(
+                Listing.tenant_id == tenant_id,
+                Listing.agent_id == agent_user_id,
+                Listing.deleted_at.is_(None),
+            )
+            .group_by(Listing.status)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return dict(rows)  # type: ignore[arg-type]
 
     async def next_reference_number(self, tenant_id: uuid.UUID, year: int) -> int:
         """Atomic per-tenant, per-year counter bump (no gap on conflict, no
