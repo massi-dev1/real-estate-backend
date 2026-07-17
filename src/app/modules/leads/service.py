@@ -245,8 +245,14 @@ class LeadsService:
         the tenant's ``settings.contact.whatsapp_number`` second; neither
         configured is a loud 409 — silently swallowing the click would lose
         the lead's contact channel. Honeypot semantics mirror
-        :meth:`capture_lead`: ``(None, url)`` still carries a real URL so a
-        bot sees nothing different in the response."""
+        :meth:`capture_lead`: the check happens *before* any listing lookup
+        or number resolution, so a bot supplying a bogus listing id or
+        hitting an unconfigured tenant can't distinguish the honeypot path
+        via a 404/409 — it always gets back a generically shaped URL."""
+        if data.hp:
+            logger.info("lead_capture_honeypot_triggered")
+            return None, "https://wa.me/"
+
         listing = None
         if data.listing_id is not None:
             listing = await self.listings.get_public(tenant, str(data.listing_id))
@@ -273,10 +279,6 @@ class LeadsService:
         else:
             prefill = "Hello, I'd like more information about your listings."
         whatsapp_url = f"https://wa.me/{digits}?text={quote(prefill)}"
-
-        if data.hp:
-            logger.info("lead_capture_honeypot_triggered")
-            return None, whatsapp_url
 
         contact = await self.find_or_create_contact(tenant.id, data.contact)
         lead = await self._create_captured_lead(

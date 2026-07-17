@@ -113,7 +113,7 @@ async def test_click_409_when_no_number_configured(
     assert await portal_leads(client, admin) == []
 
 
-async def test_click_honeypot_returns_real_url_but_persists_nothing(
+async def test_click_honeypot_returns_normal_response_but_persists_nothing(
     client: AsyncClient,
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
@@ -126,8 +126,44 @@ async def test_click_honeypot_returns_real_url_but_persists_nothing(
     resp = await click(client, click_body(hp="gotcha"))
     # A bot sees a perfectly normal response, working link included...
     assert resp.status_code == 201
-    assert resp.json()["whatsappUrl"].startswith("https://wa.me/213770000000?text=")
+    assert resp.json()["whatsappUrl"].startswith("https://wa.me/")
     # ...but nothing was persisted.
+    assert await portal_leads(client, admin) == []
+
+
+async def test_click_honeypot_bypasses_listing_lookup(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A honeypot hit must short-circuit before any listing/number
+    resolution — otherwise a bogus listing_id gives a bot a distinguishable
+    404, defeating the camouflage."""
+    tenant, admin = await tenant_and_login(
+        client, platform_headers, create_tenant_user, Role.ADMIN
+    )
+    await set_tenant_whatsapp(client, platform_headers, str(tenant["id"]), "+213770000000")
+
+    resp = await click(
+        client, click_body(hp="gotcha", listingId="00000000-0000-0000-0000-000000000000")
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["whatsappUrl"].startswith("https://wa.me/")
+    assert await portal_leads(client, admin) == []
+
+
+async def test_click_honeypot_bypasses_number_check(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A honeypot hit must not raise the 409-unconfigured-number error either
+    — that too would be a distinguishable signal for a bot."""
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+
+    resp = await click(client, click_body(hp="gotcha"))
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["whatsappUrl"].startswith("https://wa.me/")
     assert await portal_leads(client, admin) == []
 
 
