@@ -52,6 +52,16 @@ class LeadsRepository:
         stmt = select(Contact).where(Contact.tenant_id == tenant_id, Contact.id == contact_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def contacts_by_ids(
+        self, tenant_id: uuid.UUID, contact_ids: Collection[uuid.UUID]
+    ) -> list[Contact]:
+        if not contact_ids:
+            return []
+        stmt = select(Contact).where(
+            Contact.tenant_id == tenant_id, Contact.id.in_(list(contact_ids))
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
     # ---- leads ----
 
     def _lead_base(

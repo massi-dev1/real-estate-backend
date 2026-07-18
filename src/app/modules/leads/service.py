@@ -86,6 +86,8 @@ _SOURCE_WEIGHT: dict[LeadSource, int] = {
     LeadSource.VALUATION: 25,
     # A wa.me click is warm intent — the visitor is opening a direct chat.
     LeadSource.WHATSAPP_CLICK: 30,
+    # Booking a tour is the warmest signal a website can produce (§8.7).
+    LeadSource.TOUR_REQUEST: 35,
     LeadSource.CHAT: 20,
     LeadSource.SEARCH_SIGNUP: 15,
     LeadSource.AD: 10,
@@ -93,6 +95,9 @@ _SOURCE_WEIGHT: dict[LeadSource, int] = {
 }
 _ENGAGEMENT_CAP = 25
 _RECENCY_DECAY_CAP = 20
+# Each tour no-show (§8.7) knocks the score down — a booked-then-skipped
+# visit is a stronger negative signal than mere silence.
+_NO_SHOW_PENALTY = 15
 
 # Fixed default drip copy (day 0/2/7) — single-locale v1, tenant-overridable
 # via ``tenant.settings["leads"]["drip_sequence"]`` (a full replacement list
@@ -309,6 +314,31 @@ class LeadsService:
             message=None,
         )
 
+    async def register_tour_request(
+        self,
+        tenant: TenantContext,
+        contact_data: ContactCaptureIn,
+        *,
+        listing_id: uuid.UUID | None,
+        message: str | None,
+        agent_user_id: uuid.UUID,
+        source_meta: dict[str, Any],
+    ) -> Lead:
+        """Boundary for appointments' public tour booking (§8.7): the same
+        capture trunk as every other surface, except the agent is fixed to the
+        one whose slot was booked — the assignment engine must not route the
+        lead away from the person actually meeting the visitor."""
+        contact = await self.find_or_create_contact(tenant.id, contact_data)
+        return await self._create_captured_lead(
+            tenant,
+            contact,
+            listing_id=listing_id,
+            source=LeadSource.TOUR_REQUEST,
+            source_meta=source_meta,
+            message=message,
+            forced_agent_id=agent_user_id,
+        )
+
     async def _create_captured_lead(
         self,
         tenant: TenantContext,
@@ -318,9 +348,14 @@ class LeadsService:
         source: LeadSource,
         source_meta: dict[str, Any],
         message: str | None,
+        forced_agent_id: uuid.UUID | None = None,
     ) -> Lead:
         """The shared capture trunk: lead row → score → assignment engine →
-        activities → drip seed → post-commit speed-to-lead notification."""
+        activities → drip seed → post-commit speed-to-lead notification.
+
+        ``forced_agent_id`` bypasses the assignment engine — a tour request
+        (§8.7) names its agent explicitly, so routing it elsewhere would put
+        the appointment and the lead in different hands."""
         lead = Lead(
             tenant_id=tenant.id,
             contact_id=contact.id,
@@ -332,7 +367,13 @@ class LeadsService:
         await self.repo.flush()
 
         await self._recompute_score(tenant.id, lead)
-        agent_id = await self.assign_lead(tenant, lead)
+        if forced_agent_id is not None:
+            # Still re-validated: the account may have been disabled since.
+            identity = await self.users.get_identity_if_active(tenant.id, forced_agent_id)
+            agent_id = forced_agent_id if identity is not None else None
+            lead.agent_id = agent_id
+        else:
+            agent_id = await self.assign_lead(tenant, lead)
 
         if message:
             self.repo.add(
@@ -486,7 +527,13 @@ class LeadsService:
 
     async def _recompute_score(self, tenant_id: uuid.UUID, lead: Lead) -> None:
         activities = await self.repo.list_activities_for_lead(tenant_id, lead.id)
-        engagement = sum(1 for a in activities if a.type is not ActivityType.SYSTEM)
+        # NO_SHOW is a *negative* signal — it must not also count as engagement.
+        engagement = sum(
+            1
+            for a in activities
+            if a.type not in (ActivityType.SYSTEM, ActivityType.NO_SHOW)
+        )
+        no_shows = sum(1 for a in activities if a.type is ActivityType.NO_SHOW)
         last_at = max((a.created_at for a in activities), default=lead.created_at)
         days_since = max((datetime.now(UTC) - last_at.replace(tzinfo=UTC)).days, 0)
 
@@ -497,6 +544,7 @@ class LeadsService:
         score += 15 if lead.listing_id is not None else 0
         score += min(engagement * 5, _ENGAGEMENT_CAP)
         score -= min(days_since, _RECENCY_DECAY_CAP)
+        score -= no_shows * _NO_SHOW_PENALTY
         lead.score = max(0, min(100, score))
 
     # ---- pipeline ----
@@ -739,13 +787,64 @@ class LeadsService:
             entries=entries,
         )
 
-    # ---- boundary accessors (agents' §8.5 stats) ----
+    # ---- boundary accessors (agents' §8.5 stats, appointments §8.7) ----
 
     async def stats_for_agent(
         self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID
     ) -> tuple[dict[str, int], float | None]:
         """(leads-by-stage, avg first-response seconds) for one agent."""
         return await self.repo.stats_for_agent(tenant_id, agent_user_id)
+
+    async def contacts_by_ids(
+        self, tenant_id: uuid.UUID, contact_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, Contact]:
+        """Contacts keyed by id — boundary for appointments (§8.7), which
+        stores ``contact_id`` by column but never touches leads' tables."""
+        rows = await self.repo.contacts_by_ids(tenant_id, contact_ids)
+        return {row.id: row for row in rows}
+
+    async def log_tour_activity(
+        self, tenant_id: uuid.UUID, lead_id: uuid.UUID, payload: dict[str, Any]
+    ) -> None:
+        """A tour lifecycle event on the lead's timeline (§8.7); silently a
+        no-op when the lead has been deleted since booking."""
+        lead = await self.repo.get_lead(tenant_id, lead_id)
+        if lead is None:
+            return
+        self.repo.add(
+            LeadActivity(
+                tenant_id=tenant_id,
+                lead_id=lead.id,
+                actor_id=None,
+                type=ActivityType.TOUR,
+                payload=payload,
+            )
+        )
+        # Flush first: _recompute_score reads activities back from the DB.
+        await self.repo.flush()
+        await self._recompute_score(tenant_id, lead)
+        await self.repo.flush()
+
+    async def record_no_show(
+        self, tenant_id: uuid.UUID, lead_id: uuid.UUID, payload: dict[str, Any]
+    ) -> None:
+        """A tour no-show (§8.7): logged on the timeline as its own activity
+        type and folded into the score as a fixed penalty per occurrence."""
+        lead = await self.repo.get_lead(tenant_id, lead_id)
+        if lead is None:
+            return
+        self.repo.add(
+            LeadActivity(
+                tenant_id=tenant_id,
+                lead_id=lead.id,
+                actor_id=None,
+                type=ActivityType.NO_SHOW,
+                payload=payload,
+            )
+        )
+        await self.repo.flush()
+        await self._recompute_score(tenant_id, lead)
+        await self.repo.flush()
 
     # ---- drip advancement (called from the Beat task) ----
 

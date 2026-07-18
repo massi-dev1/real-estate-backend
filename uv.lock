@@ -616,6 +616,19 @@ wheels = [
 ]
 
 [[package]]
+name = "icalendar"
+version = "7.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "python-dateutil" },
+    { name = "tzdata" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2e/6c/3a20edd47656272f2d4016f6680f5bec6e2eb5ec7a23db97ebd1c15c384b/icalendar-7.2.0.tar.gz", hash = "sha256:32dacc396101825b82f9f1bbdf691c02be613130d5ab7a457e553fcd20959fdd", size = 489932, upload-time = "2026-06-23T06:48:16.492Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/a5/21a77abb12e68a986d56fdacbfbdda0606a71766662b8d19cd85d49f78dc/icalendar-7.2.0-py3-none-any.whl", hash = "sha256:77922b6be57dfcc2e94f93063d2fd7e948ada9b5bdf7b08bebbc684b1b66c7c4", size = 500620, upload-time = "2026-06-23T06:48:14.861Z" },
+]
+
+[[package]]
 name = "idna"
 version = "3.18"
 source = { registry = "https://pypi.org/simple" }
@@ -1135,6 +1148,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "geoalchemy2" },
     { name = "httpx" },
+    { name = "icalendar" },
     { name = "pwdlib", extra = ["argon2"] },
     { name = "pydantic", extra = ["email"] },
     { name = "pydantic-settings" },
@@ -1168,6 +1182,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "geoalchemy2", specifier = ">=0.16" },
     { name = "httpx", specifier = ">=0.28" },
+    { name = "icalendar", specifier = ">=7.2.0" },
     { name = "pwdlib", extras = ["argon2"], specifier = ">=0.2" },
     { name = "pydantic", extras = ["email"], specifier = ">=2.10" },
     { name = "pydantic-settings", specifier = ">=2.7" },

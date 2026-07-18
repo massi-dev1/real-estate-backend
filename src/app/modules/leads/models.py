@@ -26,6 +26,7 @@ class LeadSource(enum.StrEnum):
     SEARCH_SIGNUP = "search_signup"
     CHAT = "chat"
     WHATSAPP_CLICK = "whatsapp_click"
+    TOUR_REQUEST = "tour_request"
     PHONE = "phone"
     PORTAL = "portal"
     AD = "ad"
@@ -50,6 +51,7 @@ class ActivityType(enum.StrEnum):
     STATUS_CHANGE = "status_change"
     ASSIGNMENT = "assignment"
     TOUR = "tour"
+    NO_SHOW = "no_show"
     SYSTEM = "system"
 
 

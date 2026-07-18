@@ -36,6 +36,8 @@ celery_app.conf.update(
         "app.workers.tasks.leads.*": {"queue": "default"},
         # Same reasoning: saved-search alerts/digests are human-facing email.
         "app.workers.tasks.favorites.*": {"queue": "default"},
+        # Same reasoning: tour reminders are human-facing email.
+        "app.workers.tasks.appointments.*": {"queue": "default"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -65,5 +67,11 @@ celery_app.conf.beat_schedule = {
     "send-saved-search-digests": {
         "task": "app.workers.tasks.favorites.send_saved_search_digests",
         "schedule": crontab(hour=7, minute=0),
+    },
+    # 15-minute grain keeps the 1-hour reminder timely; the sent-at stamps
+    # make the tick idempotent.
+    "send-tour-reminders": {
+        "task": "app.workers.tasks.appointments.send_tour_reminders",
+        "schedule": crontab(minute="*/15"),
     },
 }

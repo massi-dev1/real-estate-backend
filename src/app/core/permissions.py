@@ -53,6 +53,8 @@ class Permission(enum.StrEnum):
     # radius than editing one lead, so kept separate from LEAD_MANAGE.
     AGENT_MANAGE = "agent:manage"  # manage any agent profile + teams; admins and
     # team leads (leads are further ownership-checked to *their* team in the service).
+    APPOINTMENT_MANAGE = "appointment:manage"  # tour appointments within the actor's
+    # scope; visibility reach comes from AgentsService.scope_user_ids_for, same as leads.
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -64,7 +66,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.SELLER: frozenset(),
     # Agents manage their own listings; publish rights come from the tenant's
     # `listings.agent_self_publish` setting, checked in the listings service.
-    Role.AGENT: frozenset({Permission.LISTING_MANAGE, Permission.LEAD_MANAGE}),
+    Role.AGENT: frozenset(
+        {Permission.LISTING_MANAGE, Permission.LEAD_MANAGE, Permission.APPOINTMENT_MANAGE}
+    ),
     Role.TEAM_LEAD: frozenset(
         {
             Permission.LISTING_MANAGE,
@@ -73,6 +77,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_VIEW_ALL,
             Permission.LEAD_ASSIGN,
             Permission.AGENT_MANAGE,
+            Permission.APPOINTMENT_MANAGE,
         }
     ),
     Role.MARKETING: frozenset(
@@ -82,6 +87,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_VIEW_ALL,
             Permission.LEAD_ASSIGN,
             Permission.AGENT_MANAGE,
+            Permission.APPOINTMENT_MANAGE,
         }
     ),
     Role.ADMIN: frozenset(
@@ -94,6 +100,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_VIEW_ALL,
             Permission.LEAD_ASSIGN,
             Permission.AGENT_MANAGE,
+            Permission.APPOINTMENT_MANAGE,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),
