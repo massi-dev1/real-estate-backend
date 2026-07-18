@@ -9,6 +9,7 @@ import math
 import uuid
 from collections.abc import Collection
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from geoalchemy2 import Geography
@@ -28,7 +29,13 @@ from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import InstrumentedAttribute
 
-from app.modules.listings.models import Listing, ListingStatus, ListingStatusHistory
+from app.modules.listings.models import (
+    Listing,
+    ListingPurpose,
+    ListingStatus,
+    ListingStatusHistory,
+    PropertyType,
+)
 from app.modules.listings.schemas import PublicListingFilters, SearchSort
 
 # locale → text-search config. Queries must be parsed with a config from the
@@ -259,6 +266,44 @@ class ListingRepository:
             .with_only_columns(func.count())
         )
         return (await self.session.execute(stmt)).scalar_one() > 0
+
+    async def comps_near(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        lon: float,
+        lat: float,
+        property_type: PropertyType,
+        radius_km: float,
+        limit: int,
+    ) -> list[tuple[Decimal, Decimal]]:
+        """(price, area_built) of comparable sale listings in radius — the
+        §8.8 valuation estimator's comp set. Published *and* sold rows count
+        (a closed price is the best signal an agency's own data has); rentals
+        and rows without an area or a point can't produce a price/m²."""
+        point = func.ST_SetSRID(func.ST_MakePoint(lon, lat), 4326)
+        degrees = radius_km / 111.0 / max(math.cos(math.radians(lat)), 0.1)
+        stmt = (
+            select(Listing.price, Listing.area_built)
+            .where(
+                Listing.tenant_id == tenant_id,
+                Listing.deleted_at.is_(None),
+                Listing.status.in_((ListingStatus.PUBLISHED, ListingStatus.SOLD)),
+                Listing.purpose == ListingPurpose.SALE,
+                Listing.property_type == property_type,
+                Listing.area_built > 0,
+                Listing.location.is_not(None),
+                # Same two-stage cut as the public `near` filter: GiST-servable
+                # degree window, then the exact metric distance on geography.
+                Listing.location.op("&&")(func.ST_Expand(point, degrees)),
+                func.ST_DWithin(
+                    cast(Listing.location, Geography), cast(point, Geography), radius_km * 1000
+                ),
+            )
+            .limit(limit)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [(price, area) for price, area in rows]
 
     # ---- map (§8.3) ----
 

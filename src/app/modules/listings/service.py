@@ -28,6 +28,7 @@ from app.modules.listings.models import (
     Listing,
     ListingStatus,
     ListingStatusHistory,
+    PropertyType,
 )
 from app.modules.listings.repository import ListingRepository, PublicKeyset
 from app.modules.listings.schemas import (
@@ -411,6 +412,27 @@ class ListingService:
         for the instant saved-search matcher (§8.9)."""
         return await self.repo.published_matches(
             tenant_id, listing_id, filters=filters, locale=locale
+        )
+
+    async def comps_for(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        lon: float,
+        lat: float,
+        property_type: PropertyType,
+        radius_km: float,
+        limit: int = 50,
+    ) -> list[tuple[Decimal, Decimal]]:
+        """(price, area_built) of published/sold sale comps in radius —
+        boundary accessor for the valuations estimator (§8.8)."""
+        return await self.repo.comps_near(
+            tenant_id,
+            lon=lon,
+            lat=lat,
+            property_type=property_type,
+            radius_km=radius_km,
+            limit=limit,
         )
 
     # ---- public site ----

@@ -89,6 +89,9 @@ _SOURCE_WEIGHT: dict[LeadSource, int] = {
     # Booking a tour is the warmest signal a website can produce (§8.7).
     LeadSource.TOUR_REQUEST: 35,
     LeadSource.CHAT: 20,
+    # Asking for a mortgage estimate by email signals financing intent —
+    # warmer than a bare alert signup, cooler than naming a property.
+    LeadSource.MORTGAGE: 15,
     LeadSource.SEARCH_SIGNUP: 15,
     LeadSource.AD: 10,
     LeadSource.OTHER: 5,
@@ -338,6 +341,71 @@ class LeadsService:
             message=message,
             forced_agent_id=agent_user_id,
         )
+
+    async def register_valuation_lead(
+        self,
+        tenant: TenantContext,
+        contact_data: ContactCaptureIn,
+        *,
+        message: str | None,
+        source_meta: dict[str, Any],
+        property_payload: dict[str, Any],
+    ) -> Lead:
+        """Boundary for valuations' completed seller form (§8.8): the shared
+        capture trunk, plus one system activity carrying the property details
+        and the computed estimate band — the agent's first look at the lead
+        should show what the seller described, not just a name."""
+        contact = await self.find_or_create_contact(tenant.id, contact_data)
+        lead = await self._create_captured_lead(
+            tenant,
+            contact,
+            listing_id=None,
+            source=LeadSource.VALUATION,
+            source_meta=source_meta,
+            message=message,
+        )
+        self.repo.add(
+            LeadActivity(
+                tenant_id=tenant.id,
+                lead_id=lead.id,
+                actor_id=None,
+                type=ActivityType.SYSTEM,
+                payload={"kind": "valuation_request", **property_payload},
+            )
+        )
+        return lead
+
+    async def register_mortgage_lead(
+        self,
+        tenant: TenantContext,
+        contact_data: ContactCaptureIn,
+        *,
+        listing_id: uuid.UUID | None,
+        source_meta: dict[str, Any],
+        estimate_payload: dict[str, Any],
+    ) -> Lead:
+        """Boundary for the mortgage calculator's "email me this estimate"
+        (§8.8) — the emailed numbers land on the timeline so the agent can
+        open the money conversation from what the visitor already saw."""
+        contact = await self.find_or_create_contact(tenant.id, contact_data)
+        lead = await self._create_captured_lead(
+            tenant,
+            contact,
+            listing_id=listing_id,
+            source=LeadSource.MORTGAGE,
+            source_meta=source_meta,
+            message=None,
+        )
+        self.repo.add(
+            LeadActivity(
+                tenant_id=tenant.id,
+                lead_id=lead.id,
+                actor_id=None,
+                type=ActivityType.SYSTEM,
+                payload={"kind": "mortgage_estimate", **estimate_payload},
+            )
+        )
+        return lead
 
     async def _create_captured_lead(
         self,

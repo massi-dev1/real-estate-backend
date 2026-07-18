@@ -23,6 +23,7 @@ from app.core.database import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class LeadSource(enum.StrEnum):
     LISTING_FORM = "listing_form"
     VALUATION = "valuation"
+    MORTGAGE = "mortgage"
     SEARCH_SIGNUP = "search_signup"
     CHAT = "chat"
     WHATSAPP_CLICK = "whatsapp_click"

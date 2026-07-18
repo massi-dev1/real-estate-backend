@@ -34,6 +34,7 @@ from app.modules.tenants.router import platform_router as tenants_platform_route
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
 from app.modules.users.router import staff_router, users_router
+from app.modules.valuations.router import public_router as valuations_public_router
 
 logger = structlog.get_logger(__name__)
 
@@ -79,6 +80,7 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(favorites_public_router)
     router.include_router(appointments_public_router)
     router.include_router(appointments_portal_router)
+    router.include_router(valuations_public_router)
     return router
 
 
