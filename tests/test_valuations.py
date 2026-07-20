@@ -387,3 +387,66 @@ async def test_mortgage_email_honeypot_persists_nothing(
     assert Decimal(resp.json()["estimate"]["monthlyPayment"]) > 0
     # ...but no lead was created.
     assert (await client.get(PORTAL_LEADS, headers=admin)).json()["items"] == []
+
+
+async def test_mortgage_email_honeypot_without_email_still_camouflaged(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A bot filling hp but omitting email must get the same 201 as any other
+    honeypot hit — never a distinguishable 422 that unmasks the honeypot."""
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    resp = await client.post(
+        f"{MORTGAGE}/email",
+        json={
+            "price": "120000.00",
+            "contact": {"phone": "+213770000000"},  # phone-only, no email
+            "renderedAt": rendered_at(),
+            "hp": "gotcha",
+        },
+        headers={"Host": HOST_A},
+    )
+    assert resp.status_code == 201, resp.text
+    assert (await client.get(PORTAL_LEADS, headers=admin)).json()["items"] == []
+
+
+async def test_mortgage_email_requires_email_for_real_submission(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A genuine submission (no hp) still needs an email to mail to — 422."""
+    await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    resp = await client.post(
+        f"{MORTGAGE}/email",
+        json={
+            "price": "120000.00",
+            "contact": {"phone": "+213770000000"},  # phone-only, no email
+            "renderedAt": rendered_at(),
+        },
+        headers={"Host": HOST_A},
+    )
+    assert resp.status_code == 422, resp.text
+
+
+async def test_mortgage_email_rejects_unknown_listing(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A client-supplied listingId that isn't a real published listing is a
+    404, not a 500 from an FK violation on the lead insert."""
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    resp = await client.post(
+        f"{MORTGAGE}/email",
+        json={
+            "price": "120000.00",
+            "listingId": "00000000-0000-0000-0000-000000000000",
+            "contact": {"firstName": "Buyer", "email": "listing-buyer@example.com"},
+            "renderedAt": rendered_at(),
+        },
+        headers={"Host": HOST_A},
+    )
+    assert resp.status_code == 404, resp.text
+    assert (await client.get(PORTAL_LEADS, headers=admin)).json()["items"] == []

@@ -116,7 +116,10 @@ class MortgageEmailCreate(MortgageEstimateIn, _CaptureBase):
 
     @model_validator(mode="after")
     def email_required(self) -> Self:
-        if not self.contact.email:
+        # A honeypot hit (hp filled) must reach the router's camouflaged 201,
+        # never a distinguishable 422 — so only genuine submissions are held
+        # to the "email needed to email you" rule.
+        if not self.hp and not self.contact.email:
             raise ValueError("contact.email is required to email an estimate")
         return self
 

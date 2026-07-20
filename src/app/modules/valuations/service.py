@@ -240,8 +240,11 @@ class ValuationsService:
             "currency": row.currency,
             "comps_count": row.comps_count,
         }
-        payload.update(row.details)
-        return {k: v for k, v in payload.items() if v is not None}
+        # Free-text details fill in around the canonical fields, never over
+        # them — a detail key colliding with e.g. "estimate_low" must not
+        # clobber the computed value shown to the agent.
+        merged = {**row.details, **payload}
+        return {k: v for k, v in merged.items() if v is not None}
 
     # ---- mortgage calculator (§8.8) ----
 
@@ -288,6 +291,12 @@ class ValuationsService:
         if data.hp:
             logger.info("mortgage_email_honeypot_triggered")
             return None, estimate
+
+        # A client-supplied listing_id must be a real published listing on this
+        # tenant (404 otherwise) — the same guard every other capture path
+        # applies before the FK insert, so a bogus id can't 500 the endpoint.
+        if data.listing_id is not None:
+            await self.listings.get_public(tenant, str(data.listing_id))
 
         lead = await self.leads.register_mortgage_lead(
             tenant,
