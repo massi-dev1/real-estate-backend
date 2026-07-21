@@ -200,6 +200,58 @@ async def test_agent_cannot_assign_deal_to_another(
     assert assigned["ownerUserId"] == str(agent_id)
 
 
+async def test_bogus_owner_id_is_clean_404(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """An admin-supplied owner that isn't a real tenant user is a clean 404, not
+    an FK IntegrityError → 500 (same guard as the CRM-link validation)."""
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    # Nonexistent user id on create.
+    resp = await client.post(
+        PORTAL_DEALS, json={"title": "x", "ownerUserId": str(uuid.uuid4())}, headers=admin
+    )
+    assert resp.status_code == 404, resp.text
+
+    # And on a milestone owner.
+    deal = await make_deal(client, admin, seed_milestones=False)
+    mresp = await client.post(
+        f"{PORTAL_DEALS}/{deal['id']}/milestones",
+        json={"title": "m", "ownerUserId": str(uuid.uuid4())},
+        headers=admin,
+    )
+    assert mresp.status_code == 404, mresp.text
+
+
+async def test_foreign_tenant_owner_rejected(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A user from another tenant can't be assigned as a deal owner (would leak
+    across the tenant boundary and 500 on the RESTRICT FK)."""
+    _, admin_a = await tenant_and_login(
+        client, platform_headers, create_tenant_user, Role.ADMIN, email="fa@a.example.com"
+    )
+    tenant_b = await create_tenant(
+        client, platform_headers, name="Agency B", slug="agency-b", domain=HOST_B
+    )
+    admin_b = await add_user(
+        client,
+        create_tenant_user,
+        str(tenant_b["id"]),
+        Role.ADMIN,
+        email="fb@b.example.com",
+        host=HOST_B,
+    )
+    b_user_id = await _user_id(client, admin_b)
+    resp = await client.post(
+        PORTAL_DEALS, json={"title": "x", "ownerUserId": str(b_user_id)}, headers=admin_a
+    )
+    assert resp.status_code == 404, resp.text
+
+
 async def test_marketing_has_no_deal_access(
     client: AsyncClient,
     platform_headers: dict[str, str],

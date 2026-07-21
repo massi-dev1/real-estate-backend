@@ -56,6 +56,7 @@ from app.modules.transactions.schemas import (
     MilestoneCreate,
     MilestoneUpdate,
 )
+from app.modules.users.service import UserService, get_user_service
 
 logger = structlog.get_logger(__name__)
 
@@ -85,12 +86,14 @@ class TransactionsService:
     def __init__(
         self,
         repo: TransactionsRepository,
+        users: UserService,
         agents: AgentsService,
         listings: ListingService,
         leads: LeadsService,
         storage: ObjectStorage,
     ) -> None:
         self.repo = repo
+        self.users = users
         self.agents = agents
         self.listings = listings
         self.leads = leads
@@ -137,6 +140,18 @@ class TransactionsService:
         if contact_id is not None and not await self.leads.contact_exists(tenant.id, contact_id):
             raise NotFoundError("Linked contact not found.")
 
+    async def _validate_owner(self, tenant: TenantContext, user_id: uuid.UUID | None) -> None:
+        """A deal/milestone owner must be an active user on this tenant (404
+        otherwise) — validated before the FK insert, so a bogus or foreign-tenant
+        id is a clean 404 instead of an FK IntegrityError → 500 (same rationale
+        as ``_validate_links``). ``identities_for`` returns active tenant users
+        only, so a disabled or cross-tenant id resolves to an empty result."""
+        if user_id is None:
+            return
+        identities = await self.users.identities_for(tenant.id, [user_id])
+        if user_id not in identities:
+            raise NotFoundError("Assigned user not found.")
+
     async def create_deal(
         self, tenant: TenantContext, actor: AuthenticatedUser, data: DealCreate
     ) -> Deal:
@@ -147,6 +162,10 @@ class TransactionsService:
         if owner_id != actor.id and await self._scope(tenant.id, actor) is not None:
             raise PermissionDeniedError("Only a manager can assign a deal to another agent.")
 
+        # A client-supplied owner must be a real active tenant user (the actor
+        # themselves is trivially valid, so only validate a foreign owner).
+        if owner_id != actor.id:
+            await self._validate_owner(tenant, owner_id)
         await self._validate_links(
             tenant, listing_id=data.listing_id, lead_id=data.lead_id, contact_id=data.contact_id
         )
@@ -213,8 +232,10 @@ class TransactionsService:
 
         # Reassigning the owner is a manager-only action (tenant-wide scope).
         reassigning = "owner_user_id" in patch and patch["owner_user_id"] != deal.owner_user_id
-        if reassigning and await self._scope(tenant.id, actor) is not None:
-            raise PermissionDeniedError("Only a manager can reassign a deal.")
+        if reassigning:
+            if await self._scope(tenant.id, actor) is not None:
+                raise PermissionDeniedError("Only a manager can reassign a deal.")
+            await self._validate_owner(tenant, patch["owner_user_id"])
 
         # Re-validate any link the patch touches.
         await self._validate_links(
@@ -328,6 +349,7 @@ class TransactionsService:
         data: MilestoneCreate,
     ) -> DealMilestone:
         await self._deal_or_404(tenant, actor, deal_id)
+        await self._validate_owner(tenant, data.owner_user_id)
         milestone = DealMilestone(
             tenant_id=tenant.id,
             deal_id=deal_id,
@@ -353,6 +375,8 @@ class TransactionsService:
         if milestone is None:
             raise NotFoundError("Milestone not found.")
         patch = data.model_dump(exclude_unset=True)
+        if "owner_user_id" in patch:
+            await self._validate_owner(tenant, patch["owner_user_id"])
         completed = patch.pop("completed", None)
         if completed is not None:
             # Toggling completion (re)stamps completed_at; a due_date change on a
@@ -521,6 +545,7 @@ def get_transactions_service(session: SessionDep, request: Request) -> Transacti
     settings: Settings = request.app.state.settings
     return TransactionsService(
         TransactionsRepository(session),
+        get_user_service(session),
         build_agents_boundary(session),
         get_listing_service(session),
         get_leads_service(session),
