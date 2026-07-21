@@ -174,6 +174,29 @@ class TenantService:
         self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
         return await self._get_or_404(tenant_id)
 
+    async def get_settings_key(self, tenant_id: uuid.UUID, key: str) -> dict[str, object]:
+        """One top-level ``settings`` sub-object (e.g. ``syndication``), or an
+        empty dict — boundary accessor for tenant-side modules that own a
+        settings namespace (syndication §8.14) without reaching into the tenants
+        table or the platform-only whole-blob PATCH."""
+        tenant = await self._get_or_404(tenant_id)
+        value = tenant.settings.get(key)
+        return dict(value) if isinstance(value, dict) else {}
+
+    async def replace_settings_key(
+        self, tenant_id: uuid.UUID, key: str, value: dict[str, object]
+    ) -> dict[str, object]:
+        """Replace one top-level ``settings`` sub-object, leaving every other
+        namespace untouched — the tenant-scoped counterpart to the platform's
+        whole-blob PATCH. Assigns a fresh dict so SQLAlchemy flags the JSONB
+        column dirty (an in-place mutation would not), and invalidates the
+        domain cache exactly like ``update`` does."""
+        tenant = await self._get_or_404(tenant_id)
+        tenant.settings = {**tenant.settings, key: value}
+        await self.repo.flush()
+        self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
+        return value
+
     async def set_status(self, tenant_id: uuid.UUID, status: TenantStatus) -> Tenant:
         tenant = await self._get_or_404(tenant_id)
         tenant.status = status
@@ -209,6 +232,13 @@ class TenantService:
 
 def get_tenant_service(session: SessionDep, request: Request) -> TenantService:
     return TenantService(TenantRepository(session), redis=request.app.state.redis)
+
+
+def build_tenant_boundary(session: AsyncSession, redis: Redis) -> TenantService:
+    """Construct a :class:`TenantService` for tenant-side dependents (syndication
+    §8.14) that need its settings-namespace boundary without pulling ``request``
+    into their own factory signature."""
+    return TenantService(TenantRepository(session), redis=redis)
 
 
 TenantServiceDep = Annotated[TenantService, Depends(get_tenant_service)]

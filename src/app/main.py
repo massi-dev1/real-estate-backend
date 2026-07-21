@@ -38,6 +38,8 @@ from app.modules.notifications.router import me_router as notifications_me_route
 from app.modules.notifications.router import ws_router as notifications_ws_router
 from app.modules.reviews.router import portal_router as reviews_portal_router
 from app.modules.reviews.router import public_router as reviews_public_router
+from app.modules.syndication.router import feeds_router as syndication_feeds_router
+from app.modules.syndication.router import portal_router as syndication_portal_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
@@ -99,6 +101,8 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(notifications_me_router)
     router.include_router(notifications_ws_router)
     router.include_router(transactions_portal_router)
+    router.include_router(syndication_feeds_router)
+    router.include_router(syndication_portal_router)
     return router
 
 

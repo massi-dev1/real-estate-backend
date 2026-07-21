@@ -51,6 +51,9 @@ celery_app.conf.update(
         # Milestone reminders notify a human (via notify() → email default) —
         # same class as tour reminders, never behind batch work.
         "app.workers.tasks.transactions.*": {"queue": "default"},
+        # Portal syndication (§8.14): external I/O to third-party portals — the
+        # `sync` queue exists specifically for this profile (portals/geocoding).
+        "app.workers.tasks.syndication.*": {"queue": "sync"},
     },
     task_serializer="json",
     accept_content=["json"],

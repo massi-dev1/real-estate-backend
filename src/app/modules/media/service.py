@@ -12,6 +12,7 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import Depends, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from uuid_utils.compat import uuid7
 
 from app.core.config import Settings
@@ -246,6 +247,29 @@ class MediaService:
     def public_url(self, key: str) -> str:
         return self.storage.public_url(key)
 
+    async def photo_urls_for(
+        self, tenant: TenantContext, listing_id: uuid.UUID, *, limit: int = 20
+    ) -> list[str]:
+        """Public photo URLs (largest available variant, cover/position order)
+        for a published listing — boundary accessor for the syndication feed and
+        portal payloads (§8.14). Only ``ready`` photos with variants qualify."""
+        rows = await self.repo.list_public_for_listing(tenant.id, listing_id)
+        urls: list[str] = []
+        for media in rows:
+            if media.kind is not MediaKind.PHOTO or not media.variants:
+                continue
+            variant = (
+                media.variants.get("full_webp")
+                or media.variants.get("gallery_webp")
+                or media.variants.get("full_jpeg")
+                or next(iter(media.variants.values()), None)
+            )
+            if variant is not None:
+                urls.append(self.storage.public_url(variant["key"]))
+            if len(urls) >= limit:
+                break
+        return urls
+
 
 def get_media_service(session: SessionDep, request: Request) -> MediaService:
     return MediaService(
@@ -254,6 +278,14 @@ def get_media_service(session: SessionDep, request: Request) -> MediaService:
         request.app.state.storage,
         request.app.state.settings,
     )
+
+
+def build_media_boundary(
+    session: AsyncSession, storage: ObjectStorage, settings: Settings
+) -> MediaService:
+    """Construct a :class:`MediaService` for dependents (syndication §8.14) that
+    need its public-URL boundary without pulling ``request`` into their factory."""
+    return MediaService(MediaRepository(session), get_listing_service(session), storage, settings)
 
 
 MediaServiceDep = Annotated[MediaService, Depends(get_media_service)]

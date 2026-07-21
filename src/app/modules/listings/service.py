@@ -20,9 +20,11 @@ from sqlalchemy import Row
 from app.common.geo import LonLat, point_lonlat, to_point
 from app.core.database import SessionDep, on_commit
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
+from app.core.i18n import DEFAULT_LOCALE, pick_localized
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Permission, Role
 from app.core.tenancy import TenantContext
+from app.integrations.portals.base import PortalAction, PortalListing
 from app.modules.agents.service import AgentsService, build_agents_boundary
 from app.modules.listings.models import (
     Listing,
@@ -86,9 +88,7 @@ def _reference_prefix(slug: str) -> str:
 
 
 class ListingService:
-    def __init__(
-        self, repo: ListingRepository, users: UserService, agents: AgentsService
-    ) -> None:
+    def __init__(self, repo: ListingRepository, users: UserService, agents: AgentsService) -> None:
         self.repo = repo
         self.users = users
         self.agents = agents
@@ -218,6 +218,9 @@ class ListingService:
             # An edit is exactly the "agent review" the flag was raising (§8.1).
             listing.stale_flagged_at = None
         await self.repo.flush()
+        # Editing a live listing re-syncs it to every enabled portal (§8.14).
+        if patch and listing.status is ListingStatus.PUBLISHED:
+            self._enqueue_syndication(tenant, listing.id, PortalAction.UPDATE)
         return listing
 
     async def get_portal(
@@ -351,15 +354,32 @@ class ListingService:
                 # Instant saved-search alerts (§8.9), post-commit so the
                 # matcher can never race an uncommitted publish. Lazy import:
                 # the task module imports the favorites service, which imports
-                # this module — a top-level import would be circular. A full
-                # outbox (portal syndication, search index) is still a later
-                # part.
+                # this module — a top-level import would be circular.
                 from app.workers.tasks.favorites import match_published_listing
 
                 match_published_listing.delay(str(tenant_id), str(listing_id_val))
 
             on_commit(self.repo.session, _enqueue_alerts)
+
+        # Portal syndication (§8.14): a publish pushes/updates the listing on
+        # every enabled portal; leaving `published` withdraws it. Post-commit,
+        # via the syndication service (lazy import — it imports this module).
+        self._enqueue_syndication(
+            tenant,
+            listing.id,
+            _syndication_action_for_transition(from_status, to_status),
+        )
         return listing
+
+    def _enqueue_syndication(
+        self, tenant: TenantContext, listing_id: uuid.UUID, action: PortalAction | None
+    ) -> None:
+        if action is None:
+            return
+        # Lazy import breaks the cycle: syndication.service imports this module.
+        from app.modules.syndication.service import enqueue_listing_sync
+
+        enqueue_listing_sync(self.repo.session, tenant, listing_id, action)
 
     async def history(
         self, tenant: TenantContext, actor: AuthenticatedUser, listing_id: uuid.UUID
@@ -454,8 +474,37 @@ class ListingService:
     ) -> tuple[int, Decimal | None]:
         """(listing count, median price) of published listings inside a
         boundary — boundary accessor for the guide-stats Beat job (§8.10)."""
-        return await self.repo.boundary_stats(
-            tenant_id, polygon_wkt=_boundary_wkt(boundary_rings)
+        return await self.repo.boundary_stats(tenant_id, polygon_wkt=_boundary_wkt(boundary_rings))
+
+    async def portal_payload_for(
+        self, tenant_id: uuid.UUID, listing_id: uuid.UUID, *, detail_url: str | None = None
+    ) -> PortalListing | None:
+        """A published listing as a portal-neutral :class:`PortalListing`, or
+        ``None`` if it is not currently published (§8.14). Boundary accessor for
+        the syndication module so it never imports listings' models — i18n text
+        is pre-picked to the default locale (portals take one language).
+        Photos are enriched by the syndication service via the media boundary."""
+        listing = await self.repo.get(tenant_id, listing_id)
+        if listing is None or listing.status is not ListingStatus.PUBLISHED:
+            return None
+        point = point_lonlat(listing.location)
+        return PortalListing(
+            listing_id=listing.id,
+            reference_code=listing.reference_code,
+            title=pick_localized(listing.title, DEFAULT_LOCALE) or listing.reference_code,
+            description=pick_localized(listing.description, DEFAULT_LOCALE) or "",
+            purpose=listing.purpose.value,
+            property_type=listing.property_type.value,
+            price=listing.price,
+            currency=listing.currency,
+            beds=listing.beds,
+            baths=listing.baths,
+            area_built=listing.area_built,
+            address=dict(listing.address),
+            lat=point[1] if point else None,
+            lng=point[0] if point else None,
+            features=list(listing.features),
+            detail_url=detail_url,
         )
 
     async def comps_for(
@@ -532,6 +581,19 @@ class ListingService:
     async def sitemap_entries(self, tenant: TenantContext) -> list[Row[Any]]:
         """(reference_code, updated_at) of every published listing."""
         return await self.repo.sitemap_rows(tenant.id, limit=SITEMAP_MAX_URLS)
+
+
+def _syndication_action_for_transition(
+    from_status: ListingStatus, to_status: ListingStatus
+) -> PortalAction | None:
+    """Which portal verb a status change implies (§8.14). Entering ``published``
+    pushes/updates; leaving it withdraws; a move between two non-published states
+    is invisible to portals (nothing was ever pushed)."""
+    if to_status is ListingStatus.PUBLISHED:
+        return PortalAction.UPDATE  # the service turns a first-ever sync into a push
+    if from_status is ListingStatus.PUBLISHED:
+        return PortalAction.REMOVE
+    return None
 
 
 def _boundary_wkt(rings: list[list[LonLat]]) -> str:
