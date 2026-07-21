@@ -165,6 +165,27 @@ TYPE_DEFINITIONS: dict[NotificationType, TypeDefinition] = {
             },
         },
     ),
+    NotificationType.MILESTONE_DUE: TypeDefinition(
+        version=1,
+        default_channels=frozenset({_IN_APP, _EMAIL}),
+        digest_eligible=False,  # a due date is time-sensitive — not batched.
+        templates={
+            "en": {
+                "subject": "Deal milestone due: {milestoneTitle}",
+                "body": (
+                    'The milestone "{milestoneTitle}" on deal "{dealTitle}" '
+                    "is due on {dueDate}."
+                ),
+            },
+            "fr": {
+                "subject": "Étape à échéance : {milestoneTitle}",
+                "body": (
+                    'L\'étape "{milestoneTitle}" du dossier "{dealTitle}" '
+                    "arrive à échéance le {dueDate}."
+                ),
+            },
+        },
+    ),
 }
 
 

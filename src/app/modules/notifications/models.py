@@ -70,6 +70,7 @@ class NotificationType(enum.StrEnum):
     APPOINTMENT_REMINDER = "appointment_reminder"  # tour reminder (§8.7) → contact
     APPOINTMENT_CONFIRMED = "appointment_confirmed"  # (§8.7) → contact
     APPOINTMENT_CANCELLED = "appointment_cancelled"  # (§8.7) → contact
+    MILESTONE_DUE = "milestone_due"  # deal milestone due/overdue (§8.13) → owner
 
 
 class SendStatus(enum.StrEnum):

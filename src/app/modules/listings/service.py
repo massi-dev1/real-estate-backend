@@ -367,6 +367,13 @@ class ListingService:
         await self._get_scoped_or_404(tenant.id, actor, listing_id)
         return await self.repo.history(tenant.id, listing_id)
 
+    async def exists(self, tenant_id: uuid.UUID, listing_id: uuid.UUID) -> bool:
+        """Does this listing exist on the tenant? Boundary accessor for
+        dependents (transactions' optional ``listing_id`` deal link) that only
+        need to validate a client-supplied id before an FK insert — a 404-shaped
+        user error instead of an uncaught FK IntegrityError → 500."""
+        return await self.repo.get(tenant_id, listing_id) is not None
+
     async def agent_for(self, tenant_id: uuid.UUID, listing_id: uuid.UUID) -> uuid.UUID | None:
         """The listing's assigned agent, if any — module-boundary accessor for
         dependents (leads' ``listing_agent`` assignment strategy) that need

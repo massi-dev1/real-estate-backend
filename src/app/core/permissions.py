@@ -58,6 +58,12 @@ class Permission(enum.StrEnum):
     CONTENT_MANAGE = "content:manage"  # agency-site pages + versioned legal pages (§8.10)
     REVIEW_MODERATE = "review:moderate"  # approve/reject the review queue (§8.11) — a
     # reputation concern (marketing + admin), not a team-lead one.
+    DEAL_MANAGE = "deal:manage"  # create/edit deals + milestones + documents (§8.13),
+    # within the actor's scope (agent → own, team_lead → team, admin → tenant-wide).
+    # Deliberately NOT granted to marketing — commissions are sensitive, and a
+    # marketer has no reason to see a back-office deal. Commission *figures* are
+    # gated tighter still (admin-only) in the service, a field-level gate on top
+    # of this resource permission rather than a separate permission.
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -70,7 +76,12 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     # Agents manage their own listings; publish rights come from the tenant's
     # `listings.agent_self_publish` setting, checked in the listings service.
     Role.AGENT: frozenset(
-        {Permission.LISTING_MANAGE, Permission.LEAD_MANAGE, Permission.APPOINTMENT_MANAGE}
+        {
+            Permission.LISTING_MANAGE,
+            Permission.LEAD_MANAGE,
+            Permission.APPOINTMENT_MANAGE,
+            Permission.DEAL_MANAGE,
+        }
     ),
     Role.TEAM_LEAD: frozenset(
         {
@@ -81,6 +92,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_ASSIGN,
             Permission.AGENT_MANAGE,
             Permission.APPOINTMENT_MANAGE,
+            Permission.DEAL_MANAGE,
         }
     ),
     Role.MARKETING: frozenset(
@@ -108,6 +120,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.APPOINTMENT_MANAGE,
             Permission.CONTENT_MANAGE,
             Permission.REVIEW_MODERATE,
+            Permission.DEAL_MANAGE,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),

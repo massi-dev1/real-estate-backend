@@ -922,6 +922,19 @@ class LeadsService:
         rows = await self.repo.contacts_by_ids(tenant_id, contact_ids)
         return {row.id: row for row in rows}
 
+    async def lead_exists(self, tenant_id: uuid.UUID, lead_id: uuid.UUID) -> bool:
+        """Does this lead exist on the tenant? Boundary accessor for dependents
+        (transactions' optional ``lead_id`` deal link) that validate a
+        client-supplied id before an FK insert — a 404-shaped user error, not a
+        500 FK IntegrityError."""
+        return await self.repo.get_lead(tenant_id, lead_id) is not None
+
+    async def contact_exists(self, tenant_id: uuid.UUID, contact_id: uuid.UUID) -> bool:
+        """Does this contact exist on the tenant? Boundary accessor for
+        transactions' optional ``contact_id`` deal link (same rationale as
+        ``lead_exists``)."""
+        return await self.repo.get_contact(tenant_id, contact_id) is not None
+
     async def log_tour_activity(
         self, tenant_id: uuid.UUID, lead_id: uuid.UUID, payload: dict[str, Any]
     ) -> None:

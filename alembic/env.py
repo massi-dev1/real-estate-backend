@@ -26,6 +26,7 @@ import app.modules.media.models
 import app.modules.notifications.models
 import app.modules.reviews.models
 import app.modules.tenants.models
+import app.modules.transactions.models
 import app.modules.users.models
 import app.modules.valuations.models  # noqa: F401
 from app.core.config import get_settings

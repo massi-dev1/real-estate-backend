@@ -48,6 +48,9 @@ celery_app.conf.update(
         # Notification delivery + digest emails are human-facing — same class as
         # email.* (default queue), never starved behind batch/analytics work.
         "app.workers.tasks.notifications.*": {"queue": "default"},
+        # Milestone reminders notify a human (via notify() → email default) —
+        # same class as tour reminders, never behind batch work.
+        "app.workers.tasks.transactions.*": {"queue": "default"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -102,5 +105,12 @@ celery_app.conf.beat_schedule = {
     "send-notification-digests": {
         "task": "app.workers.tasks.notifications.send_notification_digests",
         "schedule": crontab(minute="*/30"),
+    },
+    # Deal-milestone due/overdue reminders (§8.13). Hourly is granular enough for
+    # a date-based due signal; the per-milestone reminder_sent_at stamp makes
+    # each tick idempotent.
+    "send-milestone-reminders": {
+        "task": "app.workers.tasks.transactions.send_milestone_reminders",
+        "schedule": crontab(minute=0),
     },
 }
