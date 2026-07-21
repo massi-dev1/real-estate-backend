@@ -32,6 +32,11 @@ logger = structlog.get_logger(__name__)
 
 _PREVIEW_PURPOSE = "page-preview"
 
+# Content pages share the sitemap's 50k-URL budget with listings. A generous
+# per-tenant page cap keeps the combined sitemap within the sitemaps.org limit
+# without a full sitemap index (which arrives with a later content part).
+SITEMAP_MAX_PAGES = 10_000
+
 
 class ContentService:
     def __init__(self, repo: ContentRepository, settings: Settings) -> None:
@@ -159,7 +164,9 @@ class ContentService:
         return page
 
     async def sitemap_pages(self, tenant: TenantContext) -> list[ContentPage]:
-        return await self.repo.published_pages_for_sitemap(tenant.id)
+        # Bounded like the listings sitemap so the combined output stays within
+        # the 50k-URL cap sitemaps.org mandates (§8.3).
+        return await self.repo.published_pages_for_sitemap(tenant.id, limit=SITEMAP_MAX_PAGES)
 
     # ---- legal pages ----
 

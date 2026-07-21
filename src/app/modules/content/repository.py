@@ -68,7 +68,9 @@ class ContentRepository:
         )
         return (await self.session.execute(stmt)).scalar_one()
 
-    async def published_pages_for_sitemap(self, tenant_id: uuid.UUID) -> list[ContentPage]:
+    async def published_pages_for_sitemap(
+        self, tenant_id: uuid.UUID, *, limit: int
+    ) -> list[ContentPage]:
         stmt = (
             select(ContentPage)
             .where(
@@ -76,6 +78,7 @@ class ContentRepository:
                 ContentPage.status == PageStatus.PUBLISHED,
             )
             .order_by(ContentPage.created_at.desc(), ContentPage.id.desc())
+            .limit(limit)
         )
         return list((await self.session.execute(stmt)).scalars())
 
