@@ -23,6 +23,7 @@ import app.modules.favorites.models
 import app.modules.leads.models
 import app.modules.listings.models
 import app.modules.media.models
+import app.modules.notifications.models
 import app.modules.reviews.models
 import app.modules.tenants.models
 import app.modules.users.models

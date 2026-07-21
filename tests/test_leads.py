@@ -252,7 +252,9 @@ async def test_listing_agent_strategy_assigns_from_listing(
     lead = await client.get(f"{PORTAL_LEADS}/{resp.json()['id']}", headers=admin)
     assert lead.json()["agentId"] == agent_id
     # Speed-to-lead: the assignment notification reached the agent's inbox.
-    assert await mailpit_count("agent1@a.example.com", "lead") >= 1
+    # It now flows through the notifications module (Part 18) and renders in the
+    # agent's locale (fr default) — "prospect" is in the fr lead_assigned subject.
+    assert await mailpit_count("agent1@a.example.com", "prospect") >= 1
 
 
 async def test_listing_agent_strategy_leaves_unassigned_without_listing(

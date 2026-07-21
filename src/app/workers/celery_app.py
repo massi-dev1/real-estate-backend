@@ -45,6 +45,9 @@ celery_app.conf.update(
         # by explicit task name since one module holds both profiles.
         "app.workers.tasks.content.recompute_guide_stats": {"queue": "analytics"},
         "app.workers.tasks.content.generate_report_pdf": {"queue": "media"},
+        # Notification delivery + digest emails are human-facing — same class as
+        # email.* (default queue), never starved behind batch/analytics work.
+        "app.workers.tasks.notifications.*": {"queue": "default"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -92,5 +95,12 @@ celery_app.conf.beat_schedule = {
     "recompute-guide-stats": {
         "task": "app.workers.tasks.content.recompute_guide_stats",
         "schedule": crontab(hour=3, minute=30),
+    },
+    # Batch quiet-hours-parked notifications into one email per user. 30-minute
+    # grain keeps a digest reasonably timely once quiet hours end; the per-item
+    # sent_at stamp makes each tick idempotent (§8.12).
+    "send-notification-digests": {
+        "task": "app.workers.tasks.notifications.send_notification_digests",
+        "schedule": crontab(minute="*/30"),
     },
 }

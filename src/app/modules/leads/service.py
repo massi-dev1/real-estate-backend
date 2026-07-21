@@ -25,7 +25,7 @@ from urllib.parse import quote
 import structlog
 from fastapi import Depends
 
-from app.core.database import SessionDep, on_commit
+from app.core.database import SessionDep
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.core.i18n import DEFAULT_LOCALE, pick_localized
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
@@ -63,6 +63,11 @@ from app.modules.leads.schemas import (
     _CaptureBase,
 )
 from app.modules.listings.service import ListingService, get_listing_service
+from app.modules.notifications.models import NotificationType
+from app.modules.notifications.service import (
+    NotificationsService,
+    build_notifications_boundary,
+)
 from app.modules.users.service import UserService, get_user_service
 from app.workers.tasks.email import send_email
 
@@ -140,11 +145,23 @@ class LeadsService:
         users: UserService,
         listings: ListingService,
         agents: AgentsService,
+        notifications: NotificationsService | None = None,
     ) -> None:
         self.repo = repo
         self.users = users
         self.listings = listings
         self.agents = agents
+        # Built lazily from the same session when not injected (workers pass
+        # nothing; the request factory injects a redis-backed one for live WS
+        # push). A single session-scoped instance so all its ``on_commit``
+        # side effects register on the request's session.
+        self._notifications = notifications
+
+    @property
+    def notifications(self) -> NotificationsService:
+        if self._notifications is None:
+            self._notifications = build_notifications_boundary(self.repo.session)
+        return self._notifications
 
     # ---- scoping helpers ----
 
@@ -502,22 +519,21 @@ class LeadsService:
         await self.repo.flush()
 
         lead_id: uuid.UUID = lead.id
-        agent_email: str | None = None
         if agent_id is not None:
             identity = await self.users.get_identity_if_active(tenant.id, agent_id)
-            agent_email = identity.email if identity else None
-
-        async def _notify() -> None:
-            # Speed-to-lead (§8.4): enqueued post-commit so the notification
-            # never fires before the lead row is actually visible.
-            if agent_email:
-                send_email.delay(
-                    to=agent_email,
-                    subject="New lead assigned to you",
-                    text=f"A new lead ({lead_id}) has been assigned to you. Respond quickly!",
+            if identity is not None:
+                # Speed-to-lead (§8.4) now routes through the notifications
+                # module (Part 18): an in-app row for the agent + their enabled
+                # external channels (email by default), rendered in the agent's
+                # locale. notify() registers its own post-commit side effects, so
+                # nothing fires before the lead row is visible.
+                await self.notifications.notify(
+                    tenant,
+                    user_id=agent_id,
+                    type=NotificationType.LEAD_ASSIGNED,
+                    payload={"leadId": str(lead_id), "email": identity.email},
+                    locale=identity.locale,
                 )
-
-        on_commit(self.repo.session, _notify)
         return lead
 
     # ---- assignment engine ----

@@ -29,11 +29,12 @@ from app.modules.leads.repository import LeadsRepository
 from app.modules.leads.service import LeadsService
 from app.modules.listings.repository import ListingRepository
 from app.modules.listings.service import ListingService
+from app.modules.notifications.models import NotificationType
+from app.modules.notifications.service import build_notifications_boundary
 from app.modules.tenants.models import Tenant, TenantStatus
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
 from app.workers.db import run_scoped, run_scoped_many
-from app.workers.tasks.email import send_email
 
 logger = structlog.get_logger(__name__)
 
@@ -92,6 +93,12 @@ async def _escalate_unassigned(session: AsyncSession, tenant: Tenant, now: datet
 
     user_repo = UserRepository(session)
     admins = await user_repo.list_active_by_role(tenant.id, Role.ADMIN)
+    # Escalation now routes through the notifications module (Part 18): each
+    # admin gets an in-app row + their enabled external channels (email default),
+    # rendered in their locale. notify() registers post-commit side effects,
+    # which the worker's scoped transaction drains after commit.
+    notifications = build_notifications_boundary(session)
+    context = _to_context(tenant)
     for lead in leads:
         session.add(
             LeadActivity(
@@ -103,11 +110,16 @@ async def _escalate_unassigned(session: AsyncSession, tenant: Tenant, now: datet
             )
         )
         for admin in admins:
-            send_email.delay(
-                to=admin.email,
-                subject="Unassigned lead needs attention",
-                text=f"Lead {lead.id} has been unassigned for over "
-                f"{settings.lead_escalation_minutes} minutes.",
+            await notifications.notify(
+                context,
+                user_id=admin.id,
+                type=NotificationType.LEAD_ESCALATED,
+                payload={
+                    "leadId": str(lead.id),
+                    "minutes": settings.lead_escalation_minutes,
+                    "email": admin.email,
+                },
+                locale=admin.locale,
             )
     return len(leads)
 

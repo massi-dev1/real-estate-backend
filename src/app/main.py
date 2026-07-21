@@ -34,6 +34,8 @@ from app.modules.listings.router import portal_router as listings_portal_router
 from app.modules.listings.router import public_router as listings_public_router
 from app.modules.listings.router import seo_router as listings_seo_router
 from app.modules.media.router import router as media_portal_router
+from app.modules.notifications.router import me_router as notifications_me_router
+from app.modules.notifications.router import ws_router as notifications_ws_router
 from app.modules.reviews.router import portal_router as reviews_portal_router
 from app.modules.reviews.router import public_router as reviews_public_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
@@ -93,6 +95,8 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(blog_portal_router)
     router.include_router(reviews_public_router)
     router.include_router(reviews_portal_router)
+    router.include_router(notifications_me_router)
+    router.include_router(notifications_ws_router)
     return router
 
 

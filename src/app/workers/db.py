@@ -56,10 +56,20 @@ async def _scoped_transaction[T](
     tenant_id: uuid.UUID | None,
     fn: Callable[[AsyncSession], Awaitable[T]],
 ) -> T:
-    async with session_factory() as session, session.begin():
-        if tenant_id is not None:
-            await set_tenant_guc(session, tenant_id)
-        return await fn(session)
+    async with session_factory() as session:
+        async with session.begin():
+            if tenant_id is not None:
+                await set_tenant_guc(session, tenant_id)
+            result = await fn(session)
+        # Drain post-commit callbacks after a successful commit — mirrors
+        # ``core.database.get_session`` so a task body that calls a service
+        # registering ``on_commit`` side effects (e.g. ``notify()``'s WS push
+        # and external-send enqueue) fires them exactly as a request would.
+        callbacks: list[Callable[[], Awaitable[None]]]
+        callbacks = session.info.get("post_commit_callbacks", [])
+        for callback in callbacks:
+            await callback()
+        return result
 
 
 async def _run_scoped[T](
