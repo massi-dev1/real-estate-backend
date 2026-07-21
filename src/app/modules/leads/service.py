@@ -92,6 +92,9 @@ _SOURCE_WEIGHT: dict[LeadSource, int] = {
     # Asking for a mortgage estimate by email signals financing intent —
     # warmer than a bare alert signup, cooler than naming a property.
     LeadSource.MORTGAGE: 15,
+    # Downloading a market report is research intent — a soft signal, same
+    # tier as a mortgage estimate or an alert signup (§8.10).
+    LeadSource.MARKET_REPORT: 15,
     LeadSource.SEARCH_SIGNUP: 15,
     LeadSource.AD: 10,
     LeadSource.OTHER: 5,
@@ -403,6 +406,38 @@ class LeadsService:
                 actor_id=None,
                 type=ActivityType.SYSTEM,
                 payload={"kind": "mortgage_estimate", **estimate_payload},
+            )
+        )
+        return lead
+
+    async def register_report_download_lead(
+        self,
+        tenant: TenantContext,
+        contact_data: ContactCaptureIn,
+        *,
+        source_meta: dict[str, Any],
+        report_payload: dict[str, Any],
+    ) -> Lead:
+        """Boundary for the market-report download gate (§8.10 "email required
+        to download → lead"): the shared capture trunk, plus one system
+        activity naming the report the visitor asked for so the agent can open
+        from what the visitor was reading."""
+        contact = await self.find_or_create_contact(tenant.id, contact_data)
+        lead = await self._create_captured_lead(
+            tenant,
+            contact,
+            listing_id=None,
+            source=LeadSource.MARKET_REPORT,
+            source_meta=source_meta,
+            message=None,
+        )
+        self.repo.add(
+            LeadActivity(
+                tenant_id=tenant.id,
+                lead_id=lead.id,
+                actor_id=None,
+                type=ActivityType.SYSTEM,
+                payload={"kind": "market_report_download", **report_payload},
             )
         )
         return lead

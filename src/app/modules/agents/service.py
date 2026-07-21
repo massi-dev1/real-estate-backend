@@ -320,6 +320,16 @@ class AgentsService:
     async def has_territory_data(self, tenant_id: uuid.UUID) -> bool:
         return await self.repo.any_territory_profile(tenant_id)
 
+    async def published_user_id_for_slug(
+        self, tenant_id: uuid.UUID, slug: str
+    ) -> uuid.UUID | None:
+        """The user id behind a *published* agent slug — the review module's
+        target resolver (§8.11). ``None`` when the slug is unknown or the
+        profile isn't published, so a review can't be attached to a hidden
+        agent."""
+        profile = await self.repo.get_published_by_slug(tenant_id, slug)
+        return profile.user_id if profile is not None else None
+
     async def whatsapp_number_for(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID
     ) -> str | None:

@@ -38,6 +38,13 @@ celery_app.conf.update(
         "app.workers.tasks.favorites.*": {"queue": "default"},
         # Same reasoning: tour reminders are human-facing email.
         "app.workers.tasks.appointments.*": {"queue": "default"},
+        # Batch, no human-facing latency — same class as flag_stale_listings.
+        "app.workers.tasks.blog.*": {"queue": "analytics"},
+        # Guide-stats sweep is batch/analytics; the report-PDF render is a
+        # rendering job (media queue, same class as image processing). Routed
+        # by explicit task name since one module holds both profiles.
+        "app.workers.tasks.content.recompute_guide_stats": {"queue": "analytics"},
+        "app.workers.tasks.content.generate_report_pdf": {"queue": "media"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -73,5 +80,17 @@ celery_app.conf.beat_schedule = {
     "send-tour-reminders": {
         "task": "app.workers.tasks.appointments.send_tour_reminders",
         "schedule": crontab(minute="*/15"),
+    },
+    # 5-minute grain so a post scheduled for e.g. 10:00 goes live close to
+    # 10:00; the SCHEDULED-status filter makes each tick idempotent.
+    "publish-scheduled-blog-posts": {
+        "task": "app.workers.tasks.blog.publish_scheduled_posts",
+        "schedule": crontab(minute="*/5"),
+    },
+    # Nightly neighborhood-guide stats recompute (§8.10) — same batch class
+    # and cadence as flag_stale_listings.
+    "recompute-guide-stats": {
+        "task": "app.workers.tasks.content.recompute_guide_stats",
+        "schedule": crontab(hour=3, minute=30),
     },
 }

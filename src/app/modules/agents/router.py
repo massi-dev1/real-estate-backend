@@ -40,6 +40,8 @@ from app.modules.listings.schemas import PublicListingOut
 from app.modules.listings.service import ListingServiceDep
 from app.modules.media.schemas import PublicMediaOut
 from app.modules.media.service import MediaServiceDep
+from app.modules.reviews.schemas import ReviewAggregateOut
+from app.modules.reviews.service import ReviewsServiceDep
 
 # ---- public directory ----
 
@@ -53,6 +55,7 @@ PROFILE_LISTINGS_LIMIT = 12
 async def list_agents(
     tenant: TenantDep,
     service: AgentsServiceDep,
+    reviews: ReviewsServiceDep,
     query: Annotated[PublicAgentQuery, Query()],
     accept_language: str | None = Header(default=None),
 ) -> Page[PublicAgentOut]:
@@ -60,16 +63,32 @@ async def list_agents(
     cards, next_cursor, total = await service.list_public(
         tenant, specialty=query.specialty, cursor=query.cursor, limit=query.limit
     )
+    # One GROUP BY for the whole page's rating badges (§8.11), not N queries.
+    aggregates = await reviews.aggregates_by_agent(
+        tenant.id, [profile.user_id for profile, _ in cards]
+    )
     return Page(
         items=[
             PublicAgentOut.from_profile(
-                profile, identity.display_name, resolved, service.public_url
+                profile,
+                identity.display_name,
+                resolved,
+                service.public_url,
+                reviews=_review_aggregate(aggregates.get(profile.user_id)),
             )
             for profile, identity in cards
         ],
         next_cursor=next_cursor,
         total_estimate=total,
     )
+
+
+def _review_aggregate(pair: tuple[int, float] | None) -> ReviewAggregateOut:
+    """Fold a (count, average) tuple — or its absence — into the output shape."""
+    if pair is None:
+        return ReviewAggregateOut(count=0, average=None)
+    count, average = pair
+    return ReviewAggregateOut(count=count, average=average)
 
 
 @public_router.get("/{slug}")
@@ -79,6 +98,7 @@ async def get_agent(
     service: AgentsServiceDep,
     listings: ListingServiceDep,
     media_service: MediaServiceDep,
+    reviews: ReviewsServiceDep,
     locale: str | None = Query(default=None),
     accept_language: str | None = Header(default=None),
 ) -> PublicAgentDetailOut:
@@ -86,8 +106,13 @@ async def get_agent(
     profile, identity = await service.get_public(tenant, slug)
     rows = await listings.public_by_agent(tenant, profile.user_id, limit=PROFILE_LISTINGS_LIMIT)
     covers = await media_service.covers_for(tenant, [x.id for x in rows])
+    count, average = await reviews.aggregate_for_agent(tenant.id, profile.user_id)
     card = PublicAgentOut.from_profile(
-        profile, identity.display_name, resolved, service.public_url
+        profile,
+        identity.display_name,
+        resolved,
+        service.public_url,
+        reviews=ReviewAggregateOut(count=count, average=average),
     )
     return PublicAgentDetailOut(
         **card.model_dump(by_alias=False),
@@ -213,6 +238,7 @@ async def agent_stats(
     service: AgentsServiceDep,
     listings: ListingServiceDep,
     leads: LeadsServiceDep,
+    reviews: ReviewsServiceDep,
     actor: CurrentUserDep,
 ) -> AgentStatsOut:
     """§8.5 performance slice: the profile owner sees their own numbers,
@@ -220,11 +246,13 @@ async def agent_stats(
     profile = await service.get_portal(tenant, actor, profile_id)
     listings_by_status = await listings.counts_by_status_for_agent(tenant.id, profile.user_id)
     leads_by_stage, avg_response = await leads.stats_for_agent(tenant.id, profile.user_id)
+    review_count, review_avg = await reviews.aggregate_for_agent(tenant.id, profile.user_id)
     return AgentStatsOut(
         user_id=profile.user_id,
         listings_by_status=listings_by_status,
         leads_by_stage=leads_by_stage,
         avg_first_response_seconds=avg_response,
+        reviews=ReviewAggregateOut(count=review_count, average=review_avg),
     )
 
 

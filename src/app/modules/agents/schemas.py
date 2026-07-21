@@ -22,6 +22,7 @@ from app.core.schema import BaseSchema, InputSchema, OutSchema, reject_null_for
 from app.modules.agents.models import AgentProfile, PhotoStatus
 from app.modules.listings.models import ListingStatus
 from app.modules.listings.schemas import PublicListingOut
+from app.modules.reviews.schemas import ReviewAggregateOut  # schema-to-schema reuse (§5-safe)
 
 I18nText = dict[str, str]
 
@@ -260,6 +261,9 @@ class PublicAgentOut(OutSchema):
     license_no: str | None
     socials: dict[str, str]
     photo_variants: dict[str, PhotoVariantOut]
+    # Rating rollup (§8.11) — populated by the router (which composes the
+    # reviews service); ``None`` when reviews weren't requested for this shape.
+    reviews: ReviewAggregateOut | None = None
 
     @classmethod
     def from_profile(
@@ -268,6 +272,7 @@ class PublicAgentOut(OutSchema):
         display_name: str,
         locale: str,
         url_for: Callable[[str], str],
+        reviews: ReviewAggregateOut | None = None,
     ) -> "PublicAgentOut":
         return cls(
             id=profile.id,
@@ -283,6 +288,7 @@ class PublicAgentOut(OutSchema):
                 if profile.photo_status is PhotoStatus.READY
                 else {}
             ),
+            reviews=reviews,
         )
 
 
@@ -361,10 +367,11 @@ class PhotoUploadOut(OutSchema):
 
 
 class AgentStatsOut(OutSchema):
-    """§8.5 performance slice v1. Commission totals (§8.13), tours (§8.7) and
-    reviews (§8.11) join when their modules exist."""
+    """§8.5 performance slice. Reviews (§8.11) now join; commission totals
+    (§8.13) and tours (§8.7) still join when their modules exist."""
 
     user_id: uuid.UUID
     listings_by_status: dict[ListingStatus, int]
     leads_by_stage: dict[str, int]
     avg_first_response_seconds: float | None
+    reviews: ReviewAggregateOut

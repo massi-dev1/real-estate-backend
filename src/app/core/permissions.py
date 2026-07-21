@@ -56,6 +56,8 @@ class Permission(enum.StrEnum):
     APPOINTMENT_MANAGE = "appointment:manage"  # tour appointments within the actor's
     # scope; visibility reach comes from AgentsService.scope_user_ids_for, same as leads.
     CONTENT_MANAGE = "content:manage"  # agency-site pages + versioned legal pages (§8.10)
+    REVIEW_MODERATE = "review:moderate"  # approve/reject the review queue (§8.11) — a
+    # reputation concern (marketing + admin), not a team-lead one.
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -90,6 +92,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AGENT_MANAGE,
             Permission.APPOINTMENT_MANAGE,
             Permission.CONTENT_MANAGE,
+            Permission.REVIEW_MODERATE,
         }
     ),
     Role.ADMIN: frozenset(
@@ -104,6 +107,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AGENT_MANAGE,
             Permission.APPOINTMENT_MANAGE,
             Permission.CONTENT_MANAGE,
+            Permission.REVIEW_MODERATE,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),

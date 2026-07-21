@@ -17,6 +17,7 @@ from app.core.i18n import negotiate_locale
 from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.permissions import AuthenticatedUser, Permission, require
 from app.core.tenancy import TenantDep
+from app.modules.blog.service import BlogServiceDep
 from app.modules.content.service import ContentServiceDep
 from app.modules.listings.models import ListingStatus
 from app.modules.listings.schemas import (
@@ -144,11 +145,14 @@ async def sitemap(
     tenant: TenantDep,
     service: ListingServiceDep,
     content: ContentServiceDep,
+    blog: BlogServiceDep,
 ) -> Response:
-    """Per-tenant sitemap (§8.3/§8.10): every published listing plus every
-    published content page, on the domain the request arrived on."""
+    """Per-tenant sitemap (§8.3/§8.10): every published listing, content page,
+    blog post, and neighborhood guide, on the domain the request arrived on."""
     rows = await service.sitemap_entries(tenant)
     pages = await content.sitemap_pages(tenant)
+    posts = await blog.sitemap_posts(tenant)
+    guides = await content.sitemap_guides(tenant)
     host = request.headers.get("host", "").split(":")[0]
     urls = "".join(
         f"<url><loc>https://{host}/listings/{escape(row.reference_code)}</loc>"
@@ -159,6 +163,16 @@ async def sitemap(
         f"<url><loc>https://{host}/pages/{escape(page.slug)}</loc>"
         f"<lastmod>{page.updated_at.date().isoformat()}</lastmod></url>"
         for page in pages
+    )
+    urls += "".join(
+        f"<url><loc>https://{host}/blog/{escape(post.slug)}</loc>"
+        f"<lastmod>{post.updated_at.date().isoformat()}</lastmod></url>"
+        for post in posts
+    )
+    urls += "".join(
+        f"<url><loc>https://{host}/guides/{escape(guide.slug)}</loc>"
+        f"<lastmod>{guide.updated_at.date().isoformat()}</lastmod></url>"
+        for guide in guides
     )
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'

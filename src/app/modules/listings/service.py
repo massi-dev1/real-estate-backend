@@ -414,6 +414,43 @@ class ListingService:
             tenant_id, listing_id, filters=filters, locale=locale
         )
 
+    async def published_within_boundary(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        boundary_rings: list[list[LonLat]],
+        cursor: str | None,
+        limit: int | None,
+    ) -> tuple[list[Listing], str | None]:
+        """Published listings whose point falls inside a guide's boundary
+        (§8.10) — boundary accessor for the content module so it never imports
+        listings' repository. The relationship is computed live via
+        ``ST_Contains``; there is no stored FK."""
+        page_size = clamp_limit(limit)
+        after = _decode_keyset(cursor, "published_at") if cursor else None
+        polygon_wkt = _boundary_wkt(boundary_rings)
+        rows = await self.repo.list_published_within(
+            tenant_id, polygon_wkt=polygon_wkt, after=after, limit=page_size
+        )
+        items = rows[:page_size]
+        next_cursor = None
+        if len(rows) > page_size:
+            last = items[-1]
+            assert last.published_at is not None  # published rows always carry it
+            next_cursor = encode_cursor(
+                {"published_at": last.published_at.isoformat(), "id": str(last.id)}
+            )
+        return items, next_cursor
+
+    async def boundary_stats(
+        self, tenant_id: uuid.UUID, *, boundary_rings: list[list[LonLat]]
+    ) -> tuple[int, Decimal | None]:
+        """(listing count, median price) of published listings inside a
+        boundary — boundary accessor for the guide-stats Beat job (§8.10)."""
+        return await self.repo.boundary_stats(
+            tenant_id, polygon_wkt=_boundary_wkt(boundary_rings)
+        )
+
     async def comps_for(
         self,
         tenant_id: uuid.UUID,
@@ -488,6 +525,14 @@ class ListingService:
     async def sitemap_entries(self, tenant: TenantContext) -> list[Row[Any]]:
         """(reference_code, updated_at) of every published listing."""
         return await self.repo.sitemap_rows(tenant.id, limit=SITEMAP_MAX_URLS)
+
+
+def _boundary_wkt(rings: list[list[LonLat]]) -> str:
+    """MULTIPOLYGON WKT text from validated (lon, lat) rings. The content
+    schema range-checks and closes every ring before it reaches here, so this
+    only ever formats parsed floats — never raw client text."""
+    parts = [", ".join(f"{lon} {lat}" for lon, lat in ring) for ring in rings]
+    return "MULTIPOLYGON(" + ", ".join(f"(({p}))" for p in parts) + ")"
 
 
 def _cluster_precision(bbox: tuple[float, float, float, float] | None) -> int:

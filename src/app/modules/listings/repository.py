@@ -237,6 +237,60 @@ class ListingRepository:
         ).limit(limit + 1)
         return list((await self.session.execute(stmt)).scalars())
 
+    def _within_boundary(
+        self, tenant_id: uuid.UUID, polygon_wkt: str
+    ) -> Select[tuple[Listing]]:
+        """Published rows whose point falls inside a MultiPolygon. MakeValid +
+        CollectionExtract(3) so a self-intersecting drawn boundary degrades to
+        its valid polygon parts instead of erroring (same stance as Part 7's
+        ``inPolygon`` filter)."""
+        polygon = func.ST_CollectionExtract(
+            func.ST_MakeValid(func.ST_GeomFromText(polygon_wkt, 4326)), 3
+        )
+        return (
+            self._base(tenant_id)
+            .where(
+                Listing.status == ListingStatus.PUBLISHED,
+                Listing.location.is_not(None),
+                func.ST_Contains(polygon, Listing.location),
+            )
+        )
+
+    async def list_published_within(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        polygon_wkt: str,
+        after: tuple[datetime, uuid.UUID] | None,
+        limit: int,
+    ) -> list[Listing]:
+        """Keyset page on (published_at DESC, id DESC) of published listings
+        inside a boundary — the neighborhood-guide detail's listing slice."""
+        stmt = self._within_boundary(tenant_id, polygon_wkt)
+        if after is not None:
+            stmt = stmt.where(
+                or_(
+                    Listing.published_at < after[0],
+                    and_(Listing.published_at == after[0], Listing.id < after[1]),
+                )
+            )
+        stmt = stmt.order_by(Listing.published_at.desc(), Listing.id.desc()).limit(limit + 1)
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def boundary_stats(
+        self, tenant_id: uuid.UUID, *, polygon_wkt: str
+    ) -> tuple[int, Decimal | None]:
+        """(count, median price) of published listings inside a boundary —
+        computed in Postgres (``percentile_cont(0.5)``), not app-side. The
+        nightly guide-stats job's aggregate."""
+        stmt = self._within_boundary(tenant_id, polygon_wkt).with_only_columns(
+            func.count(),
+            func.percentile_cont(0.5).within_group(Listing.price.asc()),
+        )
+        row = (await self.session.execute(stmt)).one()
+        count, median = row
+        return int(count), (Decimal(str(median)) if median is not None else None)
+
     async def published_by_ids(
         self, tenant_id: uuid.UUID, listing_ids: Collection[uuid.UUID]
     ) -> list[Listing]:

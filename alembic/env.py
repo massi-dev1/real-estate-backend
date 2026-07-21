@@ -15,12 +15,18 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Import every module's models so their tables register on Base.metadata.
 import app.modules.agents.models
+import app.modules.appointments.models
 import app.modules.auth.models
+import app.modules.blog.models
+import app.modules.content.models
+import app.modules.favorites.models
 import app.modules.leads.models
 import app.modules.listings.models
 import app.modules.media.models
+import app.modules.reviews.models
 import app.modules.tenants.models
-import app.modules.users.models  # noqa: F401
+import app.modules.users.models
+import app.modules.valuations.models  # noqa: F401
 from app.core.config import get_settings
 from app.core.database import Base
 

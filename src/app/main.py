@@ -22,6 +22,8 @@ from app.modules.agents.router import teams_router
 from app.modules.appointments.router import portal_router as appointments_portal_router
 from app.modules.appointments.router import public_router as appointments_public_router
 from app.modules.auth.router import auth_router, platform_auth_router
+from app.modules.blog.router import portal_router as blog_portal_router
+from app.modules.blog.router import public_router as blog_public_router
 from app.modules.content.router import portal_router as content_portal_router
 from app.modules.content.router import public_router as content_public_router
 from app.modules.favorites.router import me_router as favorites_me_router
@@ -32,6 +34,8 @@ from app.modules.listings.router import portal_router as listings_portal_router
 from app.modules.listings.router import public_router as listings_public_router
 from app.modules.listings.router import seo_router as listings_seo_router
 from app.modules.media.router import router as media_portal_router
+from app.modules.reviews.router import portal_router as reviews_portal_router
+from app.modules.reviews.router import public_router as reviews_public_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
@@ -85,6 +89,10 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(valuations_public_router)
     router.include_router(content_public_router)
     router.include_router(content_portal_router)
+    router.include_router(blog_public_router)
+    router.include_router(blog_portal_router)
+    router.include_router(reviews_public_router)
+    router.include_router(reviews_portal_router)
     return router
 
 

@@ -24,6 +24,7 @@ class LeadSource(enum.StrEnum):
     LISTING_FORM = "listing_form"
     VALUATION = "valuation"
     MORTGAGE = "mortgage"
+    MARKET_REPORT = "market_report"
     SEARCH_SIGNUP = "search_signup"
     CHAT = "chat"
     WHATSAPP_CLICK = "whatsapp_click"
