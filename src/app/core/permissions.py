@@ -55,6 +55,7 @@ class Permission(enum.StrEnum):
     # team leads (leads are further ownership-checked to *their* team in the service).
     APPOINTMENT_MANAGE = "appointment:manage"  # tour appointments within the actor's
     # scope; visibility reach comes from AgentsService.scope_user_ids_for, same as leads.
+    CONTENT_MANAGE = "content:manage"  # agency-site pages + versioned legal pages (§8.10)
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -88,6 +89,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_ASSIGN,
             Permission.AGENT_MANAGE,
             Permission.APPOINTMENT_MANAGE,
+            Permission.CONTENT_MANAGE,
         }
     ),
     Role.ADMIN: frozenset(
@@ -101,6 +103,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.LEAD_ASSIGN,
             Permission.AGENT_MANAGE,
             Permission.APPOINTMENT_MANAGE,
+            Permission.CONTENT_MANAGE,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),

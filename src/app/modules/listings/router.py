@@ -17,6 +17,7 @@ from app.core.i18n import negotiate_locale
 from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.permissions import AuthenticatedUser, Permission, require
 from app.core.tenancy import TenantDep
+from app.modules.content.service import ContentServiceDep
 from app.modules.listings.models import ListingStatus
 from app.modules.listings.schemas import (
     ListingCreate,
@@ -87,8 +88,7 @@ async def map_published_listings(
     return MapOut(
         clustered=clustered,
         pins=[
-            MapPinOut(id=r.id, lat=r.lat, lng=r.lng, price=r.price, status=r.status)
-            for r in pins
+            MapPinOut(id=r.id, lat=r.lat, lng=r.lng, price=r.price, status=r.status) for r in pins
         ],
         clusters=[
             MapClusterOut(lat=float(r.lat), lng=float(r.lng), count=r.count) for r in clusters
@@ -140,16 +140,25 @@ seo_router = APIRouter(tags=["seo"])
 
 @seo_router.get("/sitemap.xml")
 async def sitemap(
-    request: Request, tenant: TenantDep, service: ListingServiceDep
+    request: Request,
+    tenant: TenantDep,
+    service: ListingServiceDep,
+    content: ContentServiceDep,
 ) -> Response:
-    """Per-tenant sitemap (§8.3): every published listing, on the domain the
-    request arrived on. Pages and posts join when the content part lands."""
+    """Per-tenant sitemap (§8.3/§8.10): every published listing plus every
+    published content page, on the domain the request arrived on."""
     rows = await service.sitemap_entries(tenant)
+    pages = await content.sitemap_pages(tenant)
     host = request.headers.get("host", "").split(":")[0]
     urls = "".join(
         f"<url><loc>https://{host}/listings/{escape(row.reference_code)}</loc>"
         f"<lastmod>{row.updated_at.date().isoformat()}</lastmod></url>"
         for row in rows
+    )
+    urls += "".join(
+        f"<url><loc>https://{host}/pages/{escape(page.slug)}</loc>"
+        f"<lastmod>{page.updated_at.date().isoformat()}</lastmod></url>"
+        for page in pages
     )
     xml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
