@@ -103,10 +103,23 @@ class SyndicationService:
         self, tenant: TenantContext, data: SyndicationSettingsIn
     ) -> dict[str, dict[str, object]]:
         """Replace the whole ``settings.syndication`` namespace. Keys are already
-        validated against ``KNOWN_PORTALS`` by the schema."""
-        namespace: dict[str, object] = {
-            key: cfg.model_dump(exclude_none=True) for key, cfg in data.portals.items()
-        }
+        validated against ``KNOWN_PORTALS`` by the schema.
+
+        ``api_key`` is write-only (never echoed by ``get_settings``), so a client
+        that fetches the current config, edits an unrelated field (e.g. toggling
+        ``enabled``), and PUTs it back has no value to resupply for a key it
+        already set. An omitted ``api_key`` therefore carries the previously
+        stored secret forward instead of a full-replace silently wiping it."""
+        current = await self.tenants.get_settings_key(tenant.id, SETTINGS_KEY)
+        namespace: dict[str, object] = {}
+        for key, cfg in data.portals.items():
+            dumped = cfg.model_dump(exclude_none=True)
+            if cfg.api_key is None:
+                existing = current.get(key)
+                existing_key = existing.get("api_key") if isinstance(existing, dict) else None
+                if existing_key:
+                    dumped["api_key"] = existing_key
+            namespace[key] = dumped
         await self.tenants.replace_settings_key(tenant.id, SETTINGS_KEY, namespace)
         return await self.tenants.get_settings_key(tenant.id, SETTINGS_KEY)  # type: ignore[return-value]
 

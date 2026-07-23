@@ -485,6 +485,51 @@ async def test_settings_roundtrip_hides_secret(
     assert "apiKey" not in portals["mock"]
 
 
+async def test_settings_update_preserves_api_key_when_omitted(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+    fake_adapter: FakeAdapter,
+) -> None:
+    # Set an api_key, then PUT again editing an unrelated field without
+    # resupplying it — since GET never echoes the secret, a naive full-replace
+    # would silently wipe it. It must be carried forward instead.
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    await client.put(
+        f"{PORTAL}/settings",
+        json={
+            "portals": {
+                "mock": {
+                    "enabled": True,
+                    "baseUrl": "https://portal.test/api",
+                    "apiKey": "s3cret",
+                }
+            }
+        },
+        headers=admin,
+    )
+    resp = await client.put(
+        f"{PORTAL}/settings",
+        json={"portals": {"mock": {"enabled": False, "baseUrl": "https://portal.test/api"}}},
+        headers=admin,
+    )
+    assert resp.status_code == 200, resp.text
+    portals = {p["key"]: p for p in resp.json()["portals"]}
+    assert portals["mock"]["enabled"] is False
+    assert portals["mock"]["hasApiKey"] is True
+
+    # Re-enable and confirm the preserved key is actually used to sync (not
+    # just reported as present).
+    await client.put(
+        f"{PORTAL}/settings",
+        json={"portals": {"mock": {"enabled": True, "baseUrl": "https://portal.test/api"}}},
+        headers=admin,
+    )
+    listing = await make_listing(client, admin)
+    await _publish(client, admin, listing["id"])
+    assert ("push", None) in fake_adapter.calls
+
+
 async def test_settings_rejects_unknown_portal(
     client: AsyncClient,
     platform_headers: dict[str, str],

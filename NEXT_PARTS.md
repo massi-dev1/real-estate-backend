@@ -19,46 +19,6 @@ boundary-accessor methods instead of cross-module model/repository imports).
 
 ---
 
-## Part 20 — Portal syndication (§8.14)
-
-New `integrations/portals/` (note: outside `modules/`, per the blueprint's
-own naming — this is an integration layer, not a tenant-facing feature
-module; keep it out of the RBAC/portal-router conventions that assume a
-feature module and instead treat it as infrastructure triggered by listing
-events).
-
-- One adapter class per target portal behind a common interface:
-  `push(listing) / update(listing) / remove(listing)`. Ship with at least
-  one real or clearly-stubbed adapter (if no real local portal API/creds
-  are available, build one adapter against a documented mock contract and
-  say so explicitly — don't fabricate a fake integration and call it done).
-- Per-portal sync-state table (tenant-RLS): `listing_id`, `portal_key`,
-  `remote_id`, `last_pushed_at`, `last_status`, `last_error`,
-  `retry_count`.
-- Triggered from listing lifecycle events (`publish`/`update`/`archive` —
-  reuse the same post-commit-hook enqueue pattern Part 7's alert-matching
-  and Part 14/15's processing tasks use, don't poll). Retries with
-  exponential backoff (Celery's built-in retry/backoff, queue `sync` —
-  it already exists in `celery_app.py`'s queue set specifically for this).
-- Circuit breaker per portal-tenant pair so one broken adapter doesn't
-  retry-storm forever — a simple "N consecutive failures → pause syncing,
-  surface in portal UI" is enough for v1, no need for a generic breaker
-  library.
-- Feed generation: stable per-tenant URLs serving XML/CSV of published
-  listings (`GET /feeds/{tenant}/{format}` or similar — check how
-  `seo_router`'s sitemap is exposed and mirror that pattern for
-  discoverability/auth-none). Feeds are pull-based so they need no
-  Celery trigger, just a live query at request time (reuse the existing
-  public-listing query builder, don't duplicate it).
-- Portal admin: `/portal/syndication` — which portals are enabled per
-  tenant (tenant `settings.syndication.*`, same defensive-JSONB-settings
-  pattern used elsewhere), manual re-push action, sync-state visibility
-  per listing. New permission if warranted (likely reuses
-  `LISTING_MANAGE` — syndication is a listing concern, not a new domain).
-
-Update Build progress log in the established style.
-
----
 
 ## Part 21 — Analytics & reporting (§8.15)
 
