@@ -48,6 +48,15 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _user_agent(request: Request) -> str | None:
+    """Truncate to the column width (String(400)) — an untrusted header on this
+    public endpoint can be arbitrarily long, and an over-length value would
+    raise StringDataRightTruncation → 500 (same [:400] guard the auth module's
+    client_info uses before storing a session's user agent)."""
+    ua = request.headers.get("user-agent")
+    return ua[:400] if ua else None
+
+
 @public_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(_consent_limit)])
 async def submit_consent(
     data: ConsentIn,
@@ -63,7 +72,7 @@ async def submit_consent(
         data,
         user_id=None,
         ip=_client_ip(request),
-        user_agent=request.headers.get("user-agent"),
+        user_agent=_user_agent(request),
     )
     return [ConsentRecordOut.model_validate(r) for r in records]
 

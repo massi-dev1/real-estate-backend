@@ -79,6 +79,24 @@ async def test_anonymous_consent_needs_session_id(
     assert resp.status_code == 409  # no session id → cannot tie the record
 
 
+async def test_consent_tolerates_overlong_user_agent(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A bot can send an arbitrarily long User-Agent on this public endpoint;
+    the record's user_agent column is String(400), so an untruncated value
+    would raise StringDataRightTruncation → 500. It must be truncated, not
+    crash."""
+    await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    resp = await client.post(
+        CONSENT,
+        json={"sessionId": "sess-longua", "choices": {"necessary": True}},
+        headers={"Host": HOST_A, "User-Agent": "x" * 1000},
+    )
+    assert resp.status_code == 201, resp.text
+
+
 # ---- analytics consent gate (§8.15 — the TODO Part 21 left) ----
 
 
