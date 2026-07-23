@@ -13,7 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.tenants.models import AuditLogEntry
@@ -55,6 +55,14 @@ class AuditRepository:
                 tuple_(AuditLogEntry.created_at, AuditLogEntry.id) < after
             )
         return list((await self.session.execute(stmt.limit(limit + 1))).scalars().all())
+
+    async def count(self, *, tenant_id: uuid.UUID | None, action: str | None) -> int:
+        stmt = select(func.count(AuditLogEntry.id))
+        if tenant_id is not None:
+            stmt = stmt.where(AuditLogEntry.tenant_id == tenant_id)
+        if action is not None:
+            stmt = stmt.where(AuditLogEntry.action == action)
+        return (await self.session.execute(stmt)).scalar_one()
 
 
 class AuditService:

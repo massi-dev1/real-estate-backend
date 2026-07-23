@@ -377,6 +377,83 @@ async def test_payment_failed_then_dunning_suspends(
     assert resp.json()["status"] == "suspended"
 
 
+async def test_webhook_unknown_plan_still_activates(
+    app: FastAPI, client: AsyncClient, platform_headers: dict[str, str]
+) -> None:
+    """A provider naming a plan we don't model must not poison the event: the
+    subscription still activates (keeping the tenant's own plan), and a provider
+    retry is not silently swallowed with the activation lost."""
+    body = await create_tenant(client, platform_headers)
+    tenant_id = body["id"]
+    provider = StubBillingProvider(app.state.settings.billing_webhook_secret)
+
+    payload = _webhook_payload(
+        "subscription.activated", tenant_id, subscription_id="sub_np", plan="pro-max"
+    )
+    resp = await client.post(
+        "/api/v1/billing/webhook",
+        content=payload,
+        headers={"X-Billing-Signature": provider.sign_payload(payload)},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"received": True, "processed": True}
+
+    # Tenant activated; plan stays the trial default (unknown plan ignored).
+    resp = await client.get(
+        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
+    )
+    assert resp.json()["status"] == "active"
+    assert resp.json()["plan"] == "trial"
+    resp = await client.get(
+        f"/api/v1/platform/tenants/{tenant_id}/subscription", headers=platform_headers
+    )
+    assert resp.json()["status"] == "active"
+
+
+async def test_renewal_clears_pending_offboard(
+    app: FastAPI, client: AsyncClient, platform_headers: dict[str, str]
+) -> None:
+    """A renewal/activation webhook for a tenant mid-offboard reactivates it AND
+    clears the scheduled purge — otherwise the purge sweep would delete a tenant
+    that just paid."""
+    body = await create_tenant(client, platform_headers)
+    tenant_id = body["id"]
+    provider = StubBillingProvider(app.state.settings.billing_webhook_secret)
+
+    resp = await client.post(
+        f"/api/v1/platform/tenants/{tenant_id}/offboard", headers=platform_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deletionScheduledAt"] is not None
+
+    payload = _webhook_payload(
+        "subscription.activated", tenant_id, subscription_id="sub_re", plan="starter"
+    )
+    resp = await client.post(
+        "/api/v1/billing/webhook",
+        content=payload,
+        headers={"X-Billing-Signature": provider.sign_payload(payload)},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get(
+        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
+    )
+    reactivated = resp.json()
+    assert reactivated["status"] == "active"
+    assert reactivated["offboardingAt"] is None
+    assert reactivated["deletionScheduledAt"] is None
+
+    # The purge sweep must not touch it now.
+    from app.workers.tasks.tenants import purge_scheduled_tenants
+
+    purge_scheduled_tenants()
+    resp = await client.get(
+        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
+    )
+    assert resp.status_code == 200
+
+
 async def test_trial_expiry_sweep_suspends(
     app: FastAPI, client: AsyncClient, platform_headers: dict[str, str]
 ) -> None:

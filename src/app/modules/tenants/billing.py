@@ -34,8 +34,11 @@ from app.modules.tenants.models import (
     TenantStatus,
     TenantSubscription,
 )
+from app.modules.tenants.plans import PLANS
 from app.modules.tenants.repository import TenantRepository
 from app.modules.tenants.service import TenantService, build_tenant_boundary
+
+_KNOWN_PLANS = frozenset(PLANS)
 
 logger = structlog.get_logger(__name__)
 
@@ -124,11 +127,25 @@ class BillingService:
             subscription.grace_until = None
             if event.current_period_end is not None:
                 subscription.current_period_end = event.current_period_end
-            if event.plan:
+            if event.plan and event.plan in _KNOWN_PLANS:
                 subscription.plan = event.plan
                 await self.tenants.set_plan(subscription.tenant_id, event.plan)
-            # A paid subscription reactivates a suspended/trial tenant.
-            await self._activate_tenant(subscription.tenant_id)
+            elif event.plan:
+                # The provider named a plan we don't model. Don't poison the
+                # event (it was already recorded as processed — raising here
+                # would 409 the webhook and the provider's retry would be
+                # swallowed as a duplicate): keep the mirror's own plan and
+                # log it for follow-up, but still activate the subscription.
+                logger.warning(
+                    "billing_event_unknown_plan",
+                    event_id=event.event_id,
+                    plan=event.plan,
+                    tenant_id=str(subscription.tenant_id),
+                )
+            # A paid subscription reactivates a suspended/trial tenant, and
+            # clears any in-flight offboard (a renewal must not leave the tenant
+            # scheduled for purge — same effect as cancel_offboard).
+            await self._reactivate_tenant(subscription.tenant_id)
         elif event.type is BillingEventType.PAYMENT_FAILED:
             subscription.status = SubscriptionStatus.PAST_DUE
             # Open a dunning grace window; the sweep suspends past it.
@@ -189,10 +206,20 @@ class BillingService:
                     continue
         return None
 
-    async def _activate_tenant(self, tenant_id: uuid.UUID) -> None:
+    async def _reactivate_tenant(self, tenant_id: uuid.UUID) -> None:
+        """Bring a paid tenant back to ACTIVE, and cancel any in-flight offboard
+        so the scheduled-purge sweep can't delete a tenant that just paid."""
         tenant = await self.repo.get(tenant_id)
-        if tenant is not None and tenant.status is not TenantStatus.ACTIVE:
+        if tenant is None:
+            return
+        if tenant.deletion_scheduled_at is not None or tenant.offboarding_at is not None:
+            # Undo the offboard schedule (mirrors TenantService.cancel_offboard).
+            tenant.offboarding_at = None
+            tenant.deletion_scheduled_at = None
+        if tenant.status is not TenantStatus.ACTIVE:
             await self.tenants.set_status(tenant_id, TenantStatus.ACTIVE)
+        else:
+            await self.repo.flush()
 
     # ---- dunning + trial sweeps (called from Beat tasks) ----
 

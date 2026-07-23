@@ -253,10 +253,11 @@ async def list_audit_log(
         next_cursor = _encode_cursor(
             {"created_at": last.created_at.isoformat(), "id": str(last.id)}
         )
+    total = await repo.count(tenant_id=tenant_id, action=action)
     return Page(
         items=[AuditLogOut.model_validate(r) for r in items],
         next_cursor=next_cursor,
-        total_estimate=len(items),
+        total_estimate=total,
     )
 
 
