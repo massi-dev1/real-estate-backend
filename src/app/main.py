@@ -19,6 +19,9 @@ from app.health import router as health_router
 from app.modules.agents.router import portal_router as agents_portal_router
 from app.modules.agents.router import public_router as agents_public_router
 from app.modules.agents.router import teams_router
+from app.modules.analytics.router import listing_report_router as analytics_listing_report_router
+from app.modules.analytics.router import portal_router as analytics_portal_router
+from app.modules.analytics.router import public_router as analytics_public_router
 from app.modules.appointments.router import portal_router as appointments_portal_router
 from app.modules.appointments.router import public_router as appointments_public_router
 from app.modules.auth.router import auth_router, platform_auth_router
@@ -103,6 +106,9 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(transactions_portal_router)
     router.include_router(syndication_feeds_router)
     router.include_router(syndication_portal_router)
+    router.include_router(analytics_public_router)
+    router.include_router(analytics_portal_router)
+    router.include_router(analytics_listing_report_router)
     return router
 
 

@@ -58,6 +58,11 @@ class Permission(enum.StrEnum):
     CONTENT_MANAGE = "content:manage"  # agency-site pages + versioned legal pages (§8.10)
     REVIEW_MODERATE = "review:moderate"  # approve/reject the review queue (§8.11) — a
     # reputation concern (marketing + admin), not a team-lead one.
+    ANALYTICS_VIEW = "analytics:view"  # read the reporting dashboards (§8.15). A
+    # management concern — granted to admin, marketing and team_lead. The traffic /
+    # lead-funnel / source dashboards are tenant-wide aggregates (all read from
+    # rollup tables, never raw events); the per-listing report is further
+    # visibility-scoped via the listings boundary (agent → own, team_lead → team).
     DEAL_MANAGE = "deal:manage"  # create/edit deals + milestones + documents (§8.13),
     # within the actor's scope (agent → own, team_lead → team, admin → tenant-wide).
     # Deliberately NOT granted to marketing — commissions are sensitive, and a
@@ -93,6 +98,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AGENT_MANAGE,
             Permission.APPOINTMENT_MANAGE,
             Permission.DEAL_MANAGE,
+            Permission.ANALYTICS_VIEW,
         }
     ),
     Role.MARKETING: frozenset(
@@ -105,6 +111,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.APPOINTMENT_MANAGE,
             Permission.CONTENT_MANAGE,
             Permission.REVIEW_MODERATE,
+            Permission.ANALYTICS_VIEW,
         }
     ),
     Role.ADMIN: frozenset(
@@ -121,6 +128,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.CONTENT_MANAGE,
             Permission.REVIEW_MODERATE,
             Permission.DEAL_MANAGE,
+            Permission.ANALYTICS_VIEW,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),

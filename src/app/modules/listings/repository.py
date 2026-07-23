@@ -430,6 +430,16 @@ class ListingRepository:
             stmt = stmt.where(Listing.status == status)
         return (await self.session.execute(stmt)).scalar_one()
 
+    async def scoped_listing_ids(
+        self, tenant_id: uuid.UUID, *, scope_user_ids: Collection[uuid.UUID] | None
+    ) -> list[uuid.UUID]:
+        """Ids of every (non-deleted) listing in the actor's scope — ``None``
+        scope = tenant-wide. Backs the per-listing analytics report (§8.15)."""
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).with_only_columns(
+            Listing.id
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
     async def list_published_by_agent(
         self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID, *, limit: int
     ) -> list[Listing]:

@@ -164,6 +164,49 @@ class LeadsRepository:
         avg_seconds = (await self.session.execute(avg_stmt)).scalar_one()
         return by_stage, float(avg_seconds) if avg_seconds is not None else None
 
+    async def funnel_counts_for_day(
+        self, tenant_id: uuid.UUID, day_start: datetime, day_end: datetime
+    ) -> tuple[int, int, int]:
+        """Cohort funnel for leads *created* on the given day: how many were
+        created, and of those how many are now won / lost. Keyed on
+        ``created_at`` so a nightly re-run of the same day recomputes identical
+        numbers (the analytics rollup upserts, never accumulates). ``day_end`` is
+        exclusive."""
+        won = LeadStage.WON
+        lost = LeadStage.LOST
+        stmt = select(
+            func.count(),
+            func.count().filter(Lead.stage == won),
+            func.count().filter(Lead.stage == lost),
+        ).where(
+            Lead.tenant_id == tenant_id,
+            Lead.created_at >= day_start,
+            Lead.created_at < day_end,
+        )
+        created, won_n, lost_n = (await self.session.execute(stmt)).one()
+        return int(created), int(won_n), int(lost_n)
+
+    async def source_counts_for_day(
+        self, tenant_id: uuid.UUID, day_start: datetime, day_end: datetime
+    ) -> list[tuple[str, int, int]]:
+        """Per-source cohort counts (created, now-won) for leads created on the
+        day — the source-performance rollup. ``day_end`` is exclusive."""
+        stmt = (
+            select(
+                Lead.source,
+                func.count(),
+                func.count().filter(Lead.stage == LeadStage.WON),
+            )
+            .where(
+                Lead.tenant_id == tenant_id,
+                Lead.created_at >= day_start,
+                Lead.created_at < day_end,
+            )
+            .group_by(Lead.source)
+        )
+        rows = (await self.session.execute(stmt)).all()
+        return [(source.value, int(created), int(won)) for source, created, won in rows]
+
     async def open_lead_counts(
         self, tenant_id: uuid.UUID, agent_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, int]:

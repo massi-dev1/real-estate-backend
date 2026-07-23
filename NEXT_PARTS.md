@@ -19,51 +19,6 @@ boundary-accessor methods instead of cross-module model/repository imports).
 
 ---
 
-
-## Part 21 — Analytics & reporting (§8.15)
-
-New `modules/analytics`.
-
-- `POST /events` public, batched, anonymous-ok: `listing_view`, `search`,
-  `favorite`, `form_start`, `form_submit`, `page_view`. Validate a tight
-  allowlisted event-type enum + a small typed payload per type (don't
-  accept arbitrary JSONB from anonymous clients — that's an abuse/storage
-  vector). Rate-limit like every other public surface (own bucket).
-  Respect §10.12: no ingestion for non-consenting sessions if cookie
-  consent has landed by this point (check whether §8.17 compliance has
-  shipped yet; if not, note the consent-gate as a TODO wired in when
-  compliance lands, don't block this part on it).
-- Append-only `analytics_events` table — **monthly partitions** per the
-  blueprint (native Postgres declarative partitioning on a
-  `created_at`/month key; write a migration that creates the parent +
-  the current and next month's partitions, and a Beat job or documented
-  runbook step that creates future partitions ahead of time — don't
-  let inserts fail because a partition doesn't exist yet).
-- Nightly Beat rollup jobs (queue `analytics`) aggregating raw events into
-  `listing_stats_daily`, `lead_funnel_daily`, `source_performance_daily` —
-  per-tenant via `run_scoped_many`, idempotent re-aggregation for a given
-  day (upsert on `(tenant_id, listing_id/source, day)`, not insert-only,
-  so a re-run doesn't double-count — same idempotency stance as
-  `flag_stale_listings`/blog's scheduler).
-- Raw event pruning: Beat job deleting `analytics_events` older than 90
-  days (drop whole old partitions instead of row-by-row DELETE — much
-  cheaper, and it's the whole reason to partition by month).
-- Dashboards read **only from rollup tables**, never raw events — portal
-  endpoints for traffic/top-listings, lead volume/source/conversion, agent
-  performance (can lean on existing `AgentsService` stats boundary from
-  Part 9 rather than duplicating), and a seller-dashboard endpoint
-  (views/saves/inquiries per listing — likely `/me` or portal-scoped
-  depending on whether sellers have accounts yet; check Part 10's `/me`
-  prefix and extend it if sellers are just tenant users, otherwise scope
-  this to the portal side and note the seller-portal gap as deferred).
-- New permission if a portal-wide reporting view needs gating beyond
-  existing scope rules (`ANALYTICS_VIEW` or reuse tenant-wide role checks
-  — use judgement based on what's already in the permission matrix).
-
-Update Build progress log in the established style.
-
----
-
 ## Part 22 — Tenant administration & billing (§8.16)
 
 Extends the existing `modules/tenants` (platform-level, from Part 2) —

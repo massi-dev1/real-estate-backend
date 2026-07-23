@@ -54,6 +54,9 @@ celery_app.conf.update(
         # Portal syndication (§8.14): external I/O to third-party portals — the
         # `sync` queue exists specifically for this profile (portals/geocoding).
         "app.workers.tasks.syndication.*": {"queue": "sync"},
+        # Analytics rollups/pruning/partition maintenance (§8.15): pure batch,
+        # no human-facing latency — the queue this profile is named for.
+        "app.workers.tasks.analytics.*": {"queue": "analytics"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -115,5 +118,26 @@ celery_app.conf.beat_schedule = {
     "send-milestone-reminders": {
         "task": "app.workers.tasks.transactions.send_milestone_reminders",
         "schedule": crontab(minute=0),
+    },
+    # Nightly analytics rollup (§8.15) — same batch class/cadence as the other
+    # nightly jobs. Runs after midnight so "yesterday" is fully closed; the
+    # today pass keeps dashboards near-current on the next morning's run.
+    "rollup-analytics": {
+        "task": "app.workers.tasks.analytics.rollup_analytics",
+        "schedule": crontab(hour=2, minute=0),
+    },
+    # Prune raw events past the 90-day window by dropping whole month partitions
+    # (§8.15). Monthly is granular enough — a partition only becomes droppable
+    # once its whole month clears the cutoff.
+    "prune-analytics-events": {
+        "task": "app.workers.tasks.analytics.prune_analytics_events",
+        "schedule": crontab(day_of_month=1, hour=4, minute=0),
+    },
+    # Create next months' partitions ahead of time so an insert never fails for
+    # want of a partition. Daily is cheap (idempotent CREATE IF NOT EXISTS) and
+    # guarantees the next-month partition exists well before month-end.
+    "ensure-analytics-partitions": {
+        "task": "app.workers.tasks.analytics.ensure_analytics_partitions",
+        "schedule": crontab(hour=4, minute=30),
     },
 }

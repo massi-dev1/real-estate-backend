@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
 from app.core.database import create_engine, create_session_factory, set_tenant_guc
@@ -49,6 +49,28 @@ def run_sync[T](coro: Awaitable[T]) -> T:
         return asyncio.run(coro)  # type: ignore[arg-type]
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(_run_with_current_app, coro).result()
+
+
+async def _run_ddl[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Run ``fn`` in one transaction on the **DDL** connection (the ``postgres``
+    role, ``DATABASE_DDL_URL``) — the app role (``app_user``) has no ``CREATE``
+    privilege on schema ``public``, so partition-maintenance DDL (create-ahead /
+    drop-old) must use the same role migrations do. No tenant GUC: partition
+    structure is global, not tenant-scoped."""
+    settings = get_settings()
+    engine = create_async_engine(settings.database_ddl_url)
+    try:
+        session_factory = create_session_factory(engine)
+        async with session_factory() as session, session.begin():
+            return await fn(session)
+    finally:
+        await engine.dispose()
+
+
+def run_ddl[T](fn: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Sync entry point for DDL-issuing Celery task bodies (analytics partition
+    maintenance, §8.15)."""
+    return run_sync(_run_ddl(fn))
 
 
 async def _scoped_transaction[T](

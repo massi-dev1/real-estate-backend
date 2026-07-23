@@ -914,6 +914,22 @@ class LeadsService:
         """(leads-by-stage, avg first-response seconds) for one agent."""
         return await self.repo.stats_for_agent(tenant_id, agent_user_id)
 
+    async def funnel_counts_for_day(
+        self, tenant_id: uuid.UUID, day_start: datetime, day_end: datetime
+    ) -> tuple[int, int, int]:
+        """(created, now-won, now-lost) cohort counts for leads created on the
+        day — the analytics lead-funnel rollup boundary (§8.15). ``day_end`` is
+        exclusive. The analytics module reads leads' funnel through this, never
+        its tables."""
+        return await self.repo.funnel_counts_for_day(tenant_id, day_start, day_end)
+
+    async def source_counts_for_day(
+        self, tenant_id: uuid.UUID, day_start: datetime, day_end: datetime
+    ) -> list[tuple[str, int, int]]:
+        """Per-source (source, created, now-won) cohort counts for leads created
+        on the day — the analytics source-performance rollup boundary (§8.15)."""
+        return await self.repo.source_counts_for_day(tenant_id, day_start, day_end)
+
     async def contacts_by_ids(
         self, tenant_id: uuid.UUID, contact_ids: list[uuid.UUID]
     ) -> dict[uuid.UUID, Contact]:

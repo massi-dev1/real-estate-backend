@@ -413,6 +413,15 @@ class ListingService:
         """Per-status listing counts for one agent — the §8.5 stats slice."""
         return await self.repo.counts_by_status_for_agent(tenant_id, agent_user_id)
 
+    async def scoped_listing_ids(
+        self, tenant: TenantContext, actor: AuthenticatedUser
+    ) -> list[uuid.UUID]:
+        """Ids of listings the actor may see (agent → own, team_lead → team,
+        admin → tenant-wide) — boundary accessor for analytics' per-listing
+        report (§8.15), which never imports listings' repository."""
+        scope = await self._scope_for(tenant.id, actor)
+        return await self.repo.scoped_listing_ids(tenant.id, scope_user_ids=scope)
+
     async def public_by_agent(
         self, tenant: TenantContext, agent_user_id: uuid.UUID, *, limit: int
     ) -> list[Listing]:
