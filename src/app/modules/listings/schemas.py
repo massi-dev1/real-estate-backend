@@ -227,6 +227,35 @@ class TransitionRequest(InputSchema):
     to_status: ListingStatus
 
 
+class GenerateDescriptionRequest(InputSchema):
+    """`POST /listings/{id}/generate-description` (§8.18). Which locales to draft
+    (default: every supported locale). ``tone`` steers the copy; free text so the
+    frontend can offer presets without a schema change."""
+
+    locales: list[str] = Field(default_factory=lambda: list(SUPPORTED_LOCALES))
+    tone: str | None = Field(default=None, max_length=100)
+
+    @field_validator("locales")
+    @classmethod
+    def known_locales(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("at least one locale is required")
+        unknown = set(value) - set(SUPPORTED_LOCALES)
+        if unknown:
+            raise ValueError(f"unsupported locale keys: {sorted(unknown)}")
+        # Preserve request order, drop dupes.
+        return list(dict.fromkeys(value))
+
+
+class GeneratedDescriptionOut(OutSchema):
+    """An AI-drafted i18n description (§8.18) — a **draft** the agent reviews and
+    explicitly saves via the normal PATCH; never auto-persisted over their copy.
+    ``model`` names the provider/model that produced it (``stub-echo`` offline)."""
+
+    description: I18nText
+    model: str
+
+
 class SearchSort(enum.StrEnum):
     """Public sort options (§8.3). Featured listings lead every sort."""
 

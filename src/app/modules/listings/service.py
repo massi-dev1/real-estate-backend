@@ -18,12 +18,24 @@ from fastapi import Depends
 from sqlalchemy import Row
 
 from app.common.geo import LonLat, point_lonlat, to_point
+from app.core.config import get_settings
 from app.core.database import SessionDep, on_commit
-from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    PermissionDeniedError,
+    UpstreamUnavailableError,
+)
 from app.core.i18n import DEFAULT_LOCALE, pick_localized
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Permission, Role
 from app.core.tenancy import TenantContext
+from app.integrations.ai.base import (
+    AIError,
+    AITextProvider,
+    TextGenerationRequest,
+)
+from app.integrations.ai.registry import build_ai_text_provider
 from app.integrations.portals.base import PortalAction, PortalListing
 from app.modules.agents.service import AgentsService, build_agents_boundary
 from app.modules.listings.models import (
@@ -35,6 +47,7 @@ from app.modules.listings.models import (
 from app.modules.listings.repository import ListingRepository, PublicKeyset
 from app.modules.listings.schemas import (
     PURPOSE_PRICE_PERIOD,
+    GenerateDescriptionRequest,
     ListingCreate,
     ListingUpdate,
     PublicListingFilters,
@@ -88,6 +101,51 @@ def _reference_prefix(slug: str) -> str:
     return letters or "LST"
 
 
+# Human-readable target language per locale, for the generation prompt (§8.18).
+_LOCALE_LANGUAGE: dict[str, str] = {"ar": "Arabic", "fr": "French", "en": "English"}
+
+_DESCRIPTION_SYSTEM_PROMPT = (
+    "You are a professional real-estate copywriter. Write an engaging, accurate "
+    "property listing description from the structured facts provided. Use only "
+    "the facts given — never invent details, amenities, prices, or locations. "
+    "Return prose only: no headings, no bullet lists, no markdown."
+)
+
+
+def _description_prompt(listing: Listing, locale: str, *, tone: str | None) -> str:
+    """A structured, fact-only prompt for one locale (§8.18). Built entirely
+    from the listing's own fields — the model is told to invent nothing."""
+    language = _LOCALE_LANGUAGE.get(locale, "English")
+    title = pick_localized(listing.title, locale) or listing.reference_code
+    lines = [
+        f"Write the description in {language}.",
+        f"Title: {title}",
+        f"Purpose: {listing.purpose.value}",
+        f"Property type: {listing.property_type.value}",
+        f"Price: {listing.price} {listing.currency}",
+    ]
+    if listing.beds is not None:
+        lines.append(f"Bedrooms: {listing.beds}")
+    if listing.baths is not None:
+        lines.append(f"Bathrooms: {listing.baths}")
+    if listing.area_built is not None:
+        lines.append(f"Built area: {listing.area_built} m2")
+    if listing.area_land is not None:
+        lines.append(f"Land area: {listing.area_land} m2")
+    if listing.floor is not None:
+        lines.append(f"Floor: {listing.floor}")
+    if listing.year_built is not None:
+        lines.append(f"Year built: {listing.year_built}")
+    if listing.features:
+        lines.append("Features: " + ", ".join(sorted(listing.features)))
+    locality = listing.address.get("city") or listing.address.get("state")
+    if locality:
+        lines.append(f"Location: {locality}")
+    if tone:
+        lines.append(f"Tone: {tone}")
+    return "\n".join(lines)
+
+
 class ListingService:
     def __init__(
         self,
@@ -95,11 +153,21 @@ class ListingService:
         users: UserService,
         agents: AgentsService,
         usage: UsageService,
+        ai: AITextProvider | None = None,
     ) -> None:
         self.repo = repo
         self.users = users
         self.agents = agents
         self.usage = usage
+        # The active AI text provider (§8.18 seam). Built lazily from config
+        # when not injected (offline stub by default); a test injects a fake.
+        self._ai = ai
+
+    @property
+    def ai(self) -> AITextProvider:
+        if self._ai is None:
+            self._ai = build_ai_text_provider(get_settings())
+        return self._ai
 
     # ---- scoping helpers ----
 
@@ -401,6 +469,47 @@ class ListingService:
     ) -> list[ListingStatusHistory]:
         await self._get_scoped_or_404(tenant.id, actor, listing_id)
         return await self.repo.history(tenant.id, listing_id)
+
+    # ---- AI drafting (§8.18) ----
+
+    async def generate_description(
+        self,
+        tenant: TenantContext,
+        actor: AuthenticatedUser,
+        listing_id: uuid.UUID,
+        data: GenerateDescriptionRequest,
+    ) -> tuple[dict[str, str], str]:
+        """Draft an i18n description from the listing's structured fields via the
+        AI provider (§8.18). Returns ``(description, model)`` — a **draft** the
+        router hands back for the agent to edit and explicitly save; this method
+        never writes it over the listing's own copy.
+
+        Request-time (the agent is waiting): synchronous, but a provider failure
+        or timeout surfaces as a 503 problem+json, never a hang."""
+        listing = await self._get_scoped_or_404(tenant.id, actor, listing_id)
+        drafts: dict[str, str] = {}
+        model = ""
+        for locale in data.locales:
+            request = TextGenerationRequest(
+                system=_DESCRIPTION_SYSTEM_PROMPT,
+                prompt=_description_prompt(listing, locale, tone=data.tone),
+                max_output_tokens=get_settings().ai_max_output_tokens,
+            )
+            try:
+                result = await self.ai.generate_text(request)
+            except AIError as exc:
+                logger.warning(
+                    "listing_description_generation_failed",
+                    listing_id=str(listing.id),
+                    locale=locale,
+                    permanent=exc.permanent,
+                )
+                raise UpstreamUnavailableError(
+                    "The description generator is unavailable right now. Please try again."
+                ) from exc
+            drafts[locale] = result.text.strip()
+            model = result.model
+        return drafts, model
 
     async def exists(self, tenant_id: uuid.UUID, listing_id: uuid.UUID) -> bool:
         """Does this listing exist on the tenant? Boundary accessor for

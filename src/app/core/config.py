@@ -84,6 +84,19 @@ class Settings(BaseSettings):
     # A short-lived, single-use impersonation access token (§8.16/§10.11).
     impersonation_token_ttl_seconds: int = 900
 
+    # AI features (§8.18): a provider-agnostic seam (``integrations/ai/``). No
+    # real model credentials in this environment, so the default provider is the
+    # offline template ``stub`` (design the seam, defer the tuned product) — the
+    # API surface stays stable while the implementation improves. Set
+    # ``ai_provider=anthropic`` + ``ai_api_key`` to route through a live model.
+    ai_provider: str = "stub"
+    ai_api_key: str = ""
+    ai_model: str = "claude-opus-4-8"
+    # Request-time generation is a >200ms external call (§8.18): a sane timeout
+    # + graceful error, never a hang. A provider failure becomes a 503, not a 500.
+    ai_timeout_seconds: float = 30.0
+    ai_max_output_tokens: int = 1024
+
     cors_origins: str = ""
 
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".

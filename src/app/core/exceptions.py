@@ -87,6 +87,16 @@ class InvalidWebhookError(AppError):
     title = "Invalid Webhook"
 
 
+class UpstreamUnavailableError(AppError):
+    """A third-party dependency (e.g. an AI provider, §8.18) failed or timed
+    out. Surfaced as 503 problem+json so the client can retry — never a 500 or
+    a hang."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    slug = "upstream-unavailable"
+    title = "Upstream Service Unavailable"
+
+
 def _request_id() -> str | None:
     rid = structlog.contextvars.get_contextvars().get("request_id")
     return str(rid) if rid is not None else None

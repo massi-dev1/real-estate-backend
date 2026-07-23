@@ -21,6 +21,8 @@ from app.modules.blog.service import BlogServiceDep
 from app.modules.content.service import ContentServiceDep
 from app.modules.listings.models import ListingStatus
 from app.modules.listings.schemas import (
+    GeneratedDescriptionOut,
+    GenerateDescriptionRequest,
     ListingCreate,
     ListingOut,
     ListingUpdate,
@@ -265,6 +267,21 @@ async def duplicate_listing(
     actor: AuthenticatedUser = Depends(require(Permission.LISTING_MANAGE)),
 ) -> ListingOut:
     return ListingOut.model_validate(await service.duplicate(tenant, actor, listing_id))
+
+
+@portal_router.post("/{listing_id}/generate-description")
+async def generate_listing_description(
+    listing_id: uuid.UUID,
+    data: GenerateDescriptionRequest,
+    tenant: TenantDep,
+    service: ListingServiceDep,
+    actor: AuthenticatedUser = Depends(require(Permission.LISTING_MANAGE)),
+) -> GeneratedDescriptionOut:
+    """Draft the i18n description from the listing's structured fields (§8.18).
+    Returns a **draft** the agent reviews and saves via the normal PATCH — never
+    auto-persisted. A provider failure surfaces as 503, not a hang."""
+    description, model = await service.generate_description(tenant, actor, listing_id, data)
+    return GeneratedDescriptionOut(description=description, model=model)
 
 
 @portal_router.get("/{listing_id}/history")

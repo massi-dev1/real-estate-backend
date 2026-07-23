@@ -31,6 +31,7 @@ from app.core.i18n import DEFAULT_LOCALE, pick_localized
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Role
 from app.core.tenancy import TenantContext
+from app.integrations.ai.scoring import LeadScorer, LeadScoringFeatures, build_lead_scorer
 from app.modules.agents.service import AgentsService, build_agents_boundary
 from app.modules.leads.models import (
     ActivityType,
@@ -104,11 +105,10 @@ _SOURCE_WEIGHT: dict[LeadSource, int] = {
     LeadSource.AD: 10,
     LeadSource.OTHER: 5,
 }
-_ENGAGEMENT_CAP = 25
-_RECENCY_DECAY_CAP = 20
-# Each tour no-show (§8.7) knocks the score down — a booked-then-skipped
-# visit is a stronger negative signal than mere silence.
-_NO_SHOW_PENALTY = 15
+# The engagement/recency/no-show weights and the clamp now live with the
+# :class:`~app.integrations.ai.scoring.RulesLeadScorer` behind the LeadScorer
+# seam (§8.18) — this module owns only the source → weight table (it owns the
+# source enum) and hands the scorer a neutral feature vector.
 
 # Fixed default drip copy (day 0/2/7) — single-locale v1, tenant-overridable
 # via ``tenant.settings["leads"]["drip_sequence"]`` (a full replacement list
@@ -146,11 +146,15 @@ class LeadsService:
         listings: ListingService,
         agents: AgentsService,
         notifications: NotificationsService | None = None,
+        scorer: LeadScorer | None = None,
     ) -> None:
         self.repo = repo
         self.users = users
         self.listings = listings
         self.agents = agents
+        # The active lead scorer (§8.18 seam). Rules-based today; a model-based
+        # scorer swaps in here with no call-site change.
+        self.scorer = scorer or build_lead_scorer()
         # Built lazily from the same session when not injected (workers pass
         # nothing; the request factory injects a redis-backed one for live WS
         # push). A single session-scoped instance so all its ``on_commit``
@@ -655,16 +659,21 @@ class LeadsService:
         no_shows = sum(1 for a in activities if a.type is ActivityType.NO_SHOW)
         last_at = max((a.created_at for a in activities), default=lead.created_at)
         days_since = max((datetime.now(UTC) - last_at.replace(tzinfo=UTC)).days, 0)
-
-        score = _SOURCE_WEIGHT.get(lead.source, 0)
-        # Budget/price-match approximation: no budget field exists on
-        # Contact/Lead in the fixed §6.4 schema, so "attached to a listing"
-        # stands in as a coarse intent signal, not a real price match.
-        score += 15 if lead.listing_id is not None else 0
-        score += min(engagement * 5, _ENGAGEMENT_CAP)
-        score -= min(days_since, _RECENCY_DECAY_CAP)
-        score -= no_shows * _NO_SHOW_PENALTY
-        lead.score = max(0, min(100, score))
+        # Build the provider-neutral feature vector and hand it to the scorer
+        # (§8.18 seam). This module resolves the source weight — it owns the
+        # source enum — but the scoring *decision* lives behind LeadScorer, so a
+        # model-based scorer can replace it here with no change to this method.
+        features = LeadScoringFeatures(
+            source_weight=_SOURCE_WEIGHT.get(lead.source, 0),
+            # Budget/price-match approximation: no budget field exists on
+            # Contact/Lead in the fixed §6.4 schema, so "attached to a listing"
+            # stands in as a coarse intent signal, not a real price match.
+            attached_to_listing=lead.listing_id is not None,
+            engagement_count=engagement,
+            days_since_last_activity=days_since,
+            no_show_count=no_shows,
+        )
+        lead.score = self.scorer.score(features)
 
     # ---- pipeline ----
 
