@@ -80,10 +80,14 @@ class AnthropicTextProvider:
         content = body.get("content")
         if not isinstance(content, list):
             raise AIError("AI provider returned an unexpected response shape.", permanent=True)
+        # Only join string ``text`` values — a malformed block (e.g. a null
+        # ``text``) must not raise a ``TypeError`` that would escape as a 500
+        # instead of the intended empty-text ``AIError`` → 503.
         text = "".join(
-            block.get("text", "")
+            value
             for block in content
             if isinstance(block, dict) and block.get("type") == "text"
+            if isinstance(value := block.get("text"), str)
         ).strip()
         if not text:
             raise AIError("AI provider returned empty text.", permanent=True)
