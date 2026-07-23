@@ -18,13 +18,15 @@ from app.core.exceptions import NotFoundError, problem_response
 
 logger = structlog.get_logger(__name__)
 
-# Paths served without a tenant: infra endpoints and the platform back-office.
+# Paths served without a tenant: infra endpoints, the platform back-office, and
+# the billing webhook (verified by signature, §10.9 — no tenant context).
 TENANT_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/healthz",
     "/readyz",
     "/docs",
     "/openapi.json",
     "/api/v1/platform",
+    "/api/v1/billing",
 )
 
 
@@ -37,6 +39,10 @@ class TenantContext:
     name: str
     status: str
     settings: dict[str, Any]
+    # Quota tier (§8.16) — carried on the context so a write-time quota check
+    # reads the plan limits without a separate DB hit. Defaulted so an older
+    # cached payload (pre-Part-22) deserializes without KeyError.
+    plan: str = "trial"
 
 
 class TenantResolver(Protocol):

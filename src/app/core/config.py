@@ -68,6 +68,22 @@ class Settings(BaseSettings):
     # Default photo quota per listing; tenants override via settings.media.*.
     media_max_photos_per_listing: int = 50
 
+    # Tenant lifecycle & billing (§8.16). No live payment provider in this
+    # environment — the sandbox "stub" provider is the default (design the seam,
+    # defer the live integration). ``billing_webhook_secret`` signs/verifies
+    # webhooks (§10.9); it has a dev default since the stub is self-contained.
+    billing_provider: str = "stub"
+    billing_webhook_secret: str = "dev-billing-webhook-secret"
+    trial_length_days: int = 14
+    # Dunning (§8.16): a past_due subscription stays reachable this long before
+    # the dunning sweep auto-suspends the tenant.
+    billing_grace_days: int = 7
+    # Offboard (§8.16): an offboarded tenant's data is exported then purged this
+    # many days later (a window to undo an accidental offboard).
+    offboard_deletion_delay_days: int = 30
+    # A short-lived, single-use impersonation access token (§8.16/§10.11).
+    impersonation_token_ttl_seconds: int = 900
+
     cors_origins: str = ""
 
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".

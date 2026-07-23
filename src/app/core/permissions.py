@@ -155,6 +155,9 @@ class AuthenticatedUser:
     tenant_id: uuid.UUID | None
     role: Role
     jti: str
+    # Set when this is an impersonation session (§8.16): the platform staff id
+    # acting as the tenant user. Carried through so audit/ownership can see it.
+    impersonator_id: uuid.UUID | None = None
 
     def has_permission(self, permission: Permission) -> bool:
         return permission in ROLE_PERMISSIONS[self.role]
@@ -201,7 +204,11 @@ async def get_current_user(request: Request) -> AuthenticatedUser:
         raise UnauthorizedError("The access token has been revoked.")
 
     return AuthenticatedUser(
-        id=claims.user_id, tenant_id=claims.tenant_id, role=role, jti=claims.jti
+        id=claims.user_id,
+        tenant_id=claims.tenant_id,
+        role=role,
+        jti=claims.jti,
+        impersonator_id=claims.impersonator_id,
     )
 
 

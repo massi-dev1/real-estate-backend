@@ -82,12 +82,15 @@ def user_jtis_key(user_id: uuid.UUID) -> str:
 @dataclass(frozen=True, slots=True)
 class TokenClaims:
     """Validated claims of an access JWT. ``tenant_id`` is ``None`` for
-    platform-staff tokens (§7.2)."""
+    platform-staff tokens (§7.2). ``impersonator_id`` is set only on an
+    impersonation token (§8.16/§10.11) — the platform staff acting as the
+    tenant user — and is the frontend's "impersonation active" signal."""
 
     user_id: uuid.UUID
     tenant_id: uuid.UUID | None
     role: str
     jti: str
+    impersonator_id: uuid.UUID | None = None
 
 
 def create_access_token(
@@ -96,19 +99,28 @@ def create_access_token(
     tenant_id: uuid.UUID | None,
     role: str,
     settings: Settings,
+    ttl_seconds: int | None = None,
+    impersonator_id: uuid.UUID | None = None,
 ) -> tuple[str, str]:
-    """Returns ``(token, jti)``. The ``jti`` is what logout denylists."""
+    """Returns ``(token, jti)``. The ``jti`` is what logout denylists.
+
+    ``ttl_seconds`` overrides the default access-token lifetime (impersonation
+    tokens are time-boxed short, §8.16). ``impersonator_id`` stamps an ``imp``
+    claim so the token is a distinguishable, auditable impersonation session."""
     now = datetime.now(UTC)
     jti = str(uuid.uuid4())
+    ttl = ttl_seconds if ttl_seconds is not None else settings.access_token_ttl_seconds
     claims: dict[str, Any] = {
         "sub": str(user_id),
         "role": role,
         "jti": jti,
         "iat": now,
-        "exp": now + timedelta(seconds=settings.access_token_ttl_seconds),
+        "exp": now + timedelta(seconds=ttl),
     }
     if tenant_id is not None:
         claims["tid"] = str(tenant_id)
+    if impersonator_id is not None:
+        claims["imp"] = str(impersonator_id)
     token = jwt.encode(claims, settings.app_secret_key, algorithm=JWT_ALGORITHM)
     return token, jti
 
@@ -122,11 +134,13 @@ def decode_access_token(token: str, settings: Settings) -> TokenClaims:
             options={"require": ["sub", "role", "jti", "exp", "iat"]},
         )
         tid = claims.get("tid")
+        imp = claims.get("imp")
         return TokenClaims(
             user_id=uuid.UUID(claims["sub"]),
             tenant_id=uuid.UUID(tid) if tid is not None else None,
             role=claims["role"],
             jti=claims["jti"],
+            impersonator_id=uuid.UUID(imp) if imp is not None else None,
         )
     except (jwt.InvalidTokenError, ValueError, TypeError) as exc:
         raise UnauthorizedError("The access token is invalid or has expired.") from exc

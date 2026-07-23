@@ -81,6 +81,12 @@ class RateLimitedError(AppError):
     title = "Too Many Requests"
 
 
+class InvalidWebhookError(AppError):
+    status_code = status.HTTP_400_BAD_REQUEST
+    slug = "invalid-webhook"
+    title = "Invalid Webhook"
+
+
 def _request_id() -> str | None:
     rid = structlog.contextvars.get_contextvars().get("request_id")
     return str(rid) if rid is not None else None

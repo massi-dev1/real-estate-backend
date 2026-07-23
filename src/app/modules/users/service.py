@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.exc import IntegrityError
 
-from app.core.database import SessionDep
+from app.core.database import SessionDep, set_tenant_guc
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import PLATFORM_ROLES, Role
@@ -159,6 +159,17 @@ class UserService:
         joining display names onto a page of rows (agent directory)."""
         users = await self.repo.list_active_by_ids(tenant_id, user_ids)
         return {u.id: _to_identity(u) for u in users}
+
+    async def first_admin_for_tenant(self, tenant_id: uuid.UUID) -> UserIdentity | None:
+        """The tenant's first active admin — the impersonation target (§8.16).
+
+        Called from a *platform* (tenant-exempt) request, where no
+        ``app.tenant_id`` GUC is set, so the identity RLS policy would otherwise
+        hide every tenant user. Scope the GUC to this tenant for the read (the
+        surrounding tables — tenants/usage/audit — are non-RLS and unaffected)."""
+        await set_tenant_guc(self.repo.session, tenant_id)
+        admins = await self.repo.list_active_by_role(tenant_id, Role.ADMIN)
+        return _to_identity(admins[0]) if admins else None
 
     async def list(
         self, tenant_id: uuid.UUID | None, *, cursor: str | None, limit: int | None

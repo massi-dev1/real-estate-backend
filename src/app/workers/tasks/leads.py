@@ -32,6 +32,7 @@ from app.modules.listings.service import ListingService
 from app.modules.notifications.models import NotificationType
 from app.modules.notifications.service import build_notifications_boundary
 from app.modules.tenants.models import Tenant, TenantStatus
+from app.modules.tenants.usage import build_usage_boundary
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
 from app.workers.db import run_scoped, run_scoped_many
@@ -57,7 +58,10 @@ async def _advance_drips(session: AsyncSession, tenant: Tenant, now: datetime) -
     users = UserService(UserRepository(session))
     agents = build_agents_boundary(session)
     service = LeadsService(
-        repo, users, ListingService(ListingRepository(session), users, agents), agents
+        repo,
+        users,
+        ListingService(ListingRepository(session), users, agents, build_usage_boundary(session)),
+        agents,
     )
     due = await repo.list_due_drips(tenant.id, now=now, limit=200)
     for drip in due:

@@ -19,59 +19,6 @@ boundary-accessor methods instead of cross-module model/repository imports).
 
 ---
 
-## Part 22 — Tenant administration & billing (§8.16)
-
-Extends the existing `modules/tenants` (platform-level, from Part 2) —
-don't create a new module, this is squarely tenant lifecycle/billing.
-
-- Tenant lifecycle beyond what Part 2 built (create/suspend/activate
-  already exist): trial state + trial-expiry handling, full **offboard**
-  flow (export then scheduled deletion — reuse/extend whatever DSR export
-  shape §10.12/compliance defines if that part has landed; if not, build
-  a straightforward "dump tenant's rows across modules to a downloadable
-  archive" job and note alignment-with-compliance-export as a later
-  reconciliation item).
-- Domain management extension: DNS verification (TXT record challenge,
-  stored + checked via a Beat sweep or on-demand verify endpoint) and
-  automatic TLS — actual Caddy on-demand-TLS or Cloudflare-for-SaaS
-  wiring is infrastructure/ops work outside the FastAPI app; build the
-  domain-verification *data model and API* (verification token, status,
-  verified_at) and document what the ops-side TLS wiring needs to consume
-  from it, rather than trying to shell out to infra from the app.
-- Plans & quotas: `max_listings`, `max_agents`, storage GB, monthly
-  emails — enforced **at write-time** in the relevant services (listing
-  create checks `max_listings`, agent-profile create checks `max_agents`,
-  media upload checks storage GB via a running total, not a full
-  recompute scan). Surface current usage + limits in `GET /site/config`
-  (already exists from Part 2 — extend it, don't add a parallel endpoint).
-  Over-quota is a 403 `problem+json` (`type: quota-exceeded`, matching
-  §9's own worked example).
-- Billing: `BillingProvider` interface (Stripe primary, Chargily for DZ —
-  build the interface + a Stripe implementation if credentials are
-  realistically available in this environment; otherwise implement the
-  interface with a clearly-labeled stub/sandbox provider and say so, same
-  "design the seam, defer the live integration" stance as Part 19's
-  e-signature and Part 20's portal adapter). Subscription lifecycle
-  webhook handling per §10.9 (HMAC/signature verification, ±5min
-  freshness, idempotent by event id, dedicated handling — mirrors the
-  webhook hardening rules verbatim). Dunning: grace period then auto-
-  suspend via Beat sweep (reuses Part 2's existing suspend machinery,
-  don't reimplement it).
-- Platform admin: cross-tenant metrics endpoint (aggregates from Part 21's
-  rollups if that part has landed; otherwise a light live-query version,
-  noted for later migration to rollups), and **impersonation** ("login as
-  tenant admin") — must be audit-logged (§10.11 — if `audit_log` doesn't
-  exist yet, this part needs to add at least the minimal append-only
-  table for this one use, and Part 23/compliance can broaden it later),
-  time-boxed (short-lived special-purpose token, not a normal session),
-  and the frontend contract needs a clear "impersonation active" signal
-  in the token/response so a banner can be shown — this part only needs
-  to guarantee that signal exists, not build the banner itself.
-
-Update Build progress log in the established style.
-
----
-
 ## Part 23 — Compliance module (§8.17)
 
 New `modules/compliance`.

@@ -28,6 +28,7 @@ from app.modules.favorites.service import FavoritesService
 from app.modules.listings.repository import ListingRepository
 from app.modules.listings.service import ListingService
 from app.modules.tenants.models import Tenant, TenantStatus
+from app.modules.tenants.usage import build_usage_boundary
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
 from app.workers.db import run_scoped, run_scoped_many
@@ -47,7 +48,10 @@ def _build_service(session: AsyncSession) -> FavoritesService:
     flows on the request path); settings only signs unsubscribe tokens."""
     users = UserService(UserRepository(session))
     listings = ListingService(
-        ListingRepository(session), users, build_agents_boundary(session)
+        ListingRepository(session),
+        users,
+        build_agents_boundary(session),
+        build_usage_boundary(session),
     )
     return FavoritesService(
         FavoritesRepository(session), listings, users, settings=get_settings()

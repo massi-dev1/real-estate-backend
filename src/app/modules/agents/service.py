@@ -38,6 +38,7 @@ from app.modules.agents.schemas import (
     TeamMemberAdd,
     TeamUpdate,
 )
+from app.modules.tenants.usage import UsageService, build_usage_boundary
 from app.modules.users.service import UserIdentity, UserService, get_user_service
 from app.workers.tasks.agents import process_agent_photo
 from app.workers.tasks.media import delete_media_objects
@@ -57,14 +58,22 @@ class AgentsService:
         users: UserService,
         storage: ObjectStorage | None = None,
         settings: Settings | None = None,
+        usage: UsageService | None = None,
     ) -> None:
-        """``storage``/``settings`` are only needed by the photo pipeline and
-        public URL building — the boundary factory used by leads/listings
-        (:func:`build_agents_boundary`) omits them."""
+        """``storage``/``settings``/``usage`` are only needed by the request-path
+        service (photo pipeline, public URL building, quota enforcement) — the
+        boundary factory used by leads/listings (:func:`build_agents_boundary`)
+        omits them."""
         self.repo = repo
         self.users = users
         self._storage = storage
         self._settings = settings
+        self._usage = usage
+
+    @property
+    def usage(self) -> UsageService:
+        assert self._usage is not None, "this AgentsService was built without usage"
+        return self._usage
 
     @property
     def storage(self) -> ObjectStorage:
@@ -155,6 +164,9 @@ class AgentsService:
             raise ConflictError("Agent profiles are for agent and team-lead accounts.")
         if await self.repo.get_by_user(tenant.id, target_id) is not None:
             raise ConflictError("This user already has an agent profile.")
+        # Write-time plan quota (§8.16): an agent profile is the "seat" a plan
+        # counts. Over-quota is a 403 quota-exceeded problem+json.
+        await self.usage.reserve_agent(tenant.id, tenant.plan)
         profile = AgentProfile(
             tenant_id=tenant.id,
             user_id=target_id,
@@ -219,6 +231,8 @@ class AgentsService:
         objects = self._photo_objects(profile)
         await self.repo.delete_profile(profile)
         await self.repo.flush()
+        # Free the reserved agent seat (§8.16).
+        await self.usage.release_agents(tenant.id)
         # Storage cleanup after commit: a rolled-back delete keeps its objects.
         self._enqueue_delete_objects(objects)
 
@@ -501,6 +515,7 @@ def get_agents_service(session: SessionDep, request: Request) -> AgentsService:
         get_user_service(session),
         request.app.state.storage,
         request.app.state.settings,
+        build_usage_boundary(session),
     )
 
 

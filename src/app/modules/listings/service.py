@@ -40,6 +40,7 @@ from app.modules.listings.schemas import (
     PublicListingFilters,
     SearchSort,
 )
+from app.modules.tenants.usage import UsageService, build_usage_boundary
 from app.modules.users.service import UserService, get_user_service
 
 logger = structlog.get_logger(__name__)
@@ -88,10 +89,17 @@ def _reference_prefix(slug: str) -> str:
 
 
 class ListingService:
-    def __init__(self, repo: ListingRepository, users: UserService, agents: AgentsService) -> None:
+    def __init__(
+        self,
+        repo: ListingRepository,
+        users: UserService,
+        agents: AgentsService,
+        usage: UsageService,
+    ) -> None:
         self.repo = repo
         self.users = users
         self.agents = agents
+        self.usage = usage
 
     # ---- scoping helpers ----
 
@@ -149,6 +157,9 @@ class ListingService:
         self, tenant: TenantContext, actor: AuthenticatedUser, data: ListingCreate
     ) -> Listing:
         agent_id = await self._resolve_agent(tenant.id, actor, data.agent_id)
+        # Write-time plan quota (§8.16): reserve a listing slot before minting a
+        # reference code. Over-quota is a 403 quota-exceeded problem+json.
+        await self.usage.reserve_listing(tenant.id, tenant.plan)
         year = datetime.now(UTC).year
         number = await self.repo.next_reference_number(tenant.id, year)
         listing = Listing(
@@ -268,6 +279,8 @@ class ListingService:
             raise ConflictError("Archive this listing before deleting it.")
         listing.deleted_at = datetime.now(UTC)
         await self.repo.flush()
+        # Free the reserved quota slot (§8.16).
+        await self.usage.release_listings(tenant.id)
 
     async def duplicate(
         self, tenant: TenantContext, actor: AuthenticatedUser, listing_id: uuid.UUID
@@ -275,6 +288,8 @@ class ListingService:
         """New draft with a fresh reference code; media (a later part) is
         deliberately not copied."""
         source = await self._get_scoped_or_404(tenant.id, actor, listing_id)
+        # A duplicate is a new listing — it consumes a quota slot too (§8.16).
+        await self.usage.reserve_listing(tenant.id, tenant.plan)
         year = datetime.now(UTC).year
         number = await self.repo.next_reference_number(tenant.id, year)
         copy = Listing(
@@ -669,7 +684,10 @@ def _decode_keyset(cursor: str, ts_field: str) -> tuple[datetime, uuid.UUID]:
 
 def get_listing_service(session: SessionDep) -> ListingService:
     return ListingService(
-        ListingRepository(session), get_user_service(session), build_agents_boundary(session)
+        ListingRepository(session),
+        get_user_service(session),
+        build_agents_boundary(session),
+        build_usage_boundary(session),
     )
 
 

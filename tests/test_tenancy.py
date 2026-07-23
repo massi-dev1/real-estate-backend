@@ -13,7 +13,18 @@ async def test_site_config_for_resolved_tenant(
     resp = await client.get("/api/v1/site/config", headers={"Host": "agency-a.test"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body == {"name": "Agency A", "slug": "agency-a", "settings": {"brandColor": "#ff0000"}}
+    assert body["name"] == "Agency A"
+    assert body["slug"] == "agency-a"
+    assert body["settings"] == {"brandColor": "#ff0000"}
+    # Part 22 (§8.16): site config now also carries plan + usage + limits.
+    assert body["plan"] == "trial"
+    assert body["usage"] == {
+        "listingsCount": 0,
+        "agentsCount": 0,
+        "storageBytes": 0,
+        "emailsSent": 0,
+    }
+    assert body["limits"]["maxListings"] == 25
 
 
 async def test_host_port_is_ignored(client: AsyncClient, platform_headers: dict[str, str]) -> None:

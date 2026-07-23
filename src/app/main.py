@@ -43,6 +43,8 @@ from app.modules.reviews.router import portal_router as reviews_portal_router
 from app.modules.reviews.router import public_router as reviews_public_router
 from app.modules.syndication.router import feeds_router as syndication_feeds_router
 from app.modules.syndication.router import portal_router as syndication_portal_router
+from app.modules.tenants.router import billing_webhook_router as tenants_billing_webhook_router
+from app.modules.tenants.router import platform_admin_router as tenants_platform_admin_router
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
@@ -76,6 +78,8 @@ def build_api_v1_router() -> APIRouter:
     """All module routers mount here as parts land (tenants, auth, listings, ...)."""
     router = APIRouter(prefix="/api/v1")
     router.include_router(tenants_platform_router)
+    router.include_router(tenants_platform_admin_router)
+    router.include_router(tenants_billing_webhook_router)
     router.include_router(tenants_site_router)
     router.include_router(auth_router)
     router.include_router(platform_auth_router)

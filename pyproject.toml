@@ -26,6 +26,7 @@ dependencies = [
     "icalendar>=7.2.0",
     "nh3>=0.2",
     "reportlab>=4.2",
+    "dnspython>=2.7",
 ]
 
 [dependency-groups]

@@ -29,6 +29,7 @@ from app.modules.media.models import (
 )
 from app.modules.media.repository import MediaRepository
 from app.modules.media.schemas import MediaEmbedCreate, MediaUpdate, MediaUploadRequest
+from app.modules.tenants.usage import UsageService, build_usage_boundary
 from app.workers.tasks.media import delete_media_objects, process_media
 
 _EXTENSIONS = {
@@ -46,11 +47,13 @@ class MediaService:
         listings: ListingService,
         storage: ObjectStorage,
         settings: Settings,
+        usage: UsageService,
     ) -> None:
         self.repo = repo
         self.listings = listings
         self.storage = storage
         self.settings = settings
+        self.usage = usage
 
     # ---- helpers ----
 
@@ -97,6 +100,11 @@ class MediaService:
             count = await self.repo.count_active_photos(tenant.id, listing.id)
             if count >= self._photo_quota(tenant):
                 raise QuotaExceededError("This listing has reached its photo quota.")
+        # Plan storage quota (§8.16): reserve the declared bytes. This is a
+        # client-declared size (the worker HEAD-checks the real object later),
+        # which is the correct write-time gate against unbounded uploads; a
+        # small declared-vs-actual drift is accepted for v1.
+        await self.usage.reserve_storage(tenant.id, tenant.plan, data.size_bytes)
 
         # The storage key embeds the id, so mint it before the INSERT.
         media_id = uuid7()
@@ -206,8 +214,12 @@ class MediaService:
         objects.extend(
             [self.storage.media_bucket, variant["key"]] for variant in media.variants.values()
         )
+        freed = media.size_bytes or 0
         await self.repo.delete(media)
         await self.repo.flush()
+        # Release the reserved storage quota (§8.16). Embeds have no size_bytes.
+        if freed:
+            await self.usage.release_storage(tenant.id, freed)
 
         if objects:
             # Storage cleanup happens after commit: if the transaction rolls
@@ -277,6 +289,7 @@ def get_media_service(session: SessionDep, request: Request) -> MediaService:
         get_listing_service(session),
         request.app.state.storage,
         request.app.state.settings,
+        build_usage_boundary(session),
     )
 
 
@@ -285,7 +298,13 @@ def build_media_boundary(
 ) -> MediaService:
     """Construct a :class:`MediaService` for dependents (syndication §8.14) that
     need its public-URL boundary without pulling ``request`` into their factory."""
-    return MediaService(MediaRepository(session), get_listing_service(session), storage, settings)
+    return MediaService(
+        MediaRepository(session),
+        get_listing_service(session),
+        storage,
+        settings,
+        build_usage_boundary(session),
+    )
 
 
 MediaServiceDep = Annotated[MediaService, Depends(get_media_service)]

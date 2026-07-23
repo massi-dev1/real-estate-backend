@@ -6,9 +6,10 @@ set) invalidates the affected cache keys.
 """
 
 import json
+import secrets
 import uuid
 from dataclasses import asdict
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 import structlog
@@ -17,15 +18,35 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.config import get_settings
 from app.core.database import SessionDep
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.tenancy import TenantContext
-from app.modules.tenants.models import Tenant, TenantDomain, TenantStatus
+from app.modules.tenants.dns_verify import (
+    TxtResolver,
+    default_txt_lookup,
+    txt_record_present,
+)
+from app.modules.tenants.models import (
+    DomainVerificationStatus,
+    Tenant,
+    TenantDomain,
+    TenantStatus,
+)
+from app.modules.tenants.plans import DEFAULT_PLAN, PLANS
 from app.modules.tenants.repository import TenantRepository
 from app.modules.tenants.schemas import TenantCreate, TenantDomainCreate, TenantUpdate
+from app.modules.tenants.usage import UsageService, UsageSnapshot, build_usage_boundary
 
 logger = structlog.get_logger(__name__)
+
+_KNOWN_PLANS = frozenset(PLANS)
+
+
+def _new_verification_token() -> str:
+    """DNS TXT-challenge value the tenant publishes to prove domain control."""
+    return f"realestate-verify={secrets.token_urlsafe(24)}"
 
 
 def _domain_cache_key(domain: str) -> str:
@@ -39,6 +60,7 @@ def _to_context(tenant: Tenant) -> TenantContext:
         name=tenant.name,
         status=tenant.status.value,
         settings=tenant.settings,
+        plan=tenant.plan,
     )
 
 
@@ -88,9 +110,17 @@ class DomainTenantResolver:
 
 
 class TenantService:
-    def __init__(self, repo: TenantRepository, redis: Redis) -> None:
+    def __init__(
+        self, repo: TenantRepository, redis: Redis, usage: UsageService | None = None
+    ) -> None:
         self.repo = repo
         self.redis = redis
+        self._usage = usage
+
+    @property
+    def usage(self) -> UsageService:
+        assert self._usage is not None, "this TenantService was built without usage"
+        return self._usage
 
     def _invalidate_domains_after_commit(self, domains: list[str]) -> None:
         """Queue cache invalidation for after commit — invalidating earlier
@@ -128,8 +158,21 @@ class TenantService:
         if await self.repo.domain_exists(data.domain):
             raise ConflictError(f"Domain '{data.domain}' is already in use.")
 
-        tenant = Tenant(name=data.name, slug=data.slug, settings=data.settings)
-        tenant.domains.append(TenantDomain(domain=data.domain, is_primary=True))
+        trial_days = get_settings().trial_length_days
+        tenant = Tenant(
+            name=data.name,
+            slug=data.slug,
+            settings=data.settings,
+            plan=DEFAULT_PLAN,
+            trial_ends_at=datetime.now(UTC) + timedelta(days=trial_days),
+        )
+        tenant.domains.append(
+            TenantDomain(
+                domain=data.domain,
+                is_primary=True,
+                verification_token=_new_verification_token(),
+            )
+        )
         self.repo.add(tenant)
         await self._flush_or_conflict()
         return await self._get_or_404(tenant.id)
@@ -204,6 +247,96 @@ class TenantService:
         self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
         return await self._get_or_404(tenant_id)
 
+    # ---- plan / lifecycle (§8.16) ----
+
+    async def set_plan(self, tenant_id: uuid.UUID, plan: str) -> Tenant:
+        """Change the quota tier. An unknown plan key is a 422 (the caller
+        validates against the code-owned plans table first)."""
+        if plan not in _KNOWN_PLANS:
+            raise ConflictError(f"Unknown plan '{plan}'.")
+        tenant = await self._get_or_404(tenant_id)
+        tenant.plan = plan
+        await self.repo.flush()
+        # The plan rides on the cached TenantContext — invalidate so a
+        # quota check on the next request reads the new tier.
+        self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
+        return await self._get_or_404(tenant_id)
+
+    async def start_offboard(self, tenant_id: uuid.UUID) -> Tenant:
+        """Begin offboarding: suspend the tenant now (site goes 402), stamp the
+        offboard time, and schedule deletion after the undo window. The export
+        job runs from the offboard task; the purge from the deletion sweep."""
+        tenant = await self._get_or_404(tenant_id)
+        now = datetime.now(UTC)
+        tenant.status = TenantStatus.SUSPENDED
+        tenant.offboarding_at = now
+        tenant.deletion_scheduled_at = now + timedelta(
+            days=get_settings().offboard_deletion_delay_days
+        )
+        await self.repo.flush()
+        self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
+        # Export the tenant's data after commit (offboard step 1). Lazy import —
+        # the task module imports this service.
+        tenant_id_str = str(tenant_id)
+
+        async def _enqueue_export() -> None:
+            from app.workers.tasks.tenants import export_tenant
+
+            export_tenant.delay(tenant_id_str)
+
+        self.repo.after_commit(_enqueue_export)
+        return await self._get_or_404(tenant_id)
+
+    async def cancel_offboard(self, tenant_id: uuid.UUID) -> Tenant:
+        """Undo an offboard before the purge runs — reactivate and clear the
+        deletion schedule (a purged tenant is gone; this only works pre-purge)."""
+        tenant = await self._get_or_404(tenant_id)
+        if tenant.deleted_at is not None:
+            raise ConflictError("This tenant has already been deleted.")
+        tenant.status = TenantStatus.ACTIVE
+        tenant.offboarding_at = None
+        tenant.deletion_scheduled_at = None
+        await self.repo.flush()
+        self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
+        return await self._get_or_404(tenant_id)
+
+    # ---- domain verification (§8.16) ----
+
+    async def verify_domain(
+        self,
+        tenant_id: uuid.UUID,
+        domain_id: uuid.UUID,
+        *,
+        resolver: TxtResolver | None = None,
+    ) -> TenantDomain:
+        """Check the domain's DNS TXT challenge and flip its status. Idempotent:
+        an already-verified domain re-verifies to the same result. ``resolver``
+        defaults to the live DNS lookup, resolved at call time (so tests can
+        monkeypatch the module global)."""
+        await self._get_or_404(tenant_id)
+        domain = await self.repo.get_domain(tenant_id, domain_id)
+        if domain is None:
+            raise NotFoundError("Domain not found.")
+        if not domain.verification_token:
+            raise ConflictError("This domain has no verification challenge.")
+        present = await txt_record_present(
+            domain.domain,
+            domain.verification_token,
+            resolver=resolver or default_txt_lookup,
+        )
+        if present:
+            domain.verification_status = DomainVerificationStatus.VERIFIED
+            domain.verified_at = datetime.now(UTC)
+        else:
+            domain.verification_status = DomainVerificationStatus.FAILED
+        await self.repo.flush()
+        return domain
+
+    # ---- usage / site config (§8.16) ----
+
+    async def usage_snapshot(self, tenant_id: uuid.UUID) -> UsageSnapshot:
+        return await self.usage.snapshot(tenant_id)
+
     async def add_domain(self, tenant_id: uuid.UUID, data: TenantDomainCreate) -> Tenant:
         tenant = await self._get_or_404(tenant_id)
         if await self.repo.domain_exists(data.domain):
@@ -211,7 +344,13 @@ class TenantService:
         if data.is_primary:
             for existing in tenant.domains:
                 existing.is_primary = False
-        tenant.domains.append(TenantDomain(domain=data.domain, is_primary=data.is_primary))
+        tenant.domains.append(
+            TenantDomain(
+                domain=data.domain,
+                is_primary=data.is_primary,
+                verification_token=_new_verification_token(),
+            )
+        )
         await self._flush_or_conflict()
         self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
         return await self._get_or_404(tenant_id)
@@ -231,14 +370,20 @@ class TenantService:
 
 
 def get_tenant_service(session: SessionDep, request: Request) -> TenantService:
-    return TenantService(TenantRepository(session), redis=request.app.state.redis)
+    return TenantService(
+        TenantRepository(session),
+        redis=request.app.state.redis,
+        usage=build_usage_boundary(session),
+    )
 
 
 def build_tenant_boundary(session: AsyncSession, redis: Redis) -> TenantService:
     """Construct a :class:`TenantService` for tenant-side dependents (syndication
     §8.14) that need its settings-namespace boundary without pulling ``request``
     into their own factory signature."""
-    return TenantService(TenantRepository(session), redis=redis)
+    return TenantService(
+        TenantRepository(session), redis=redis, usage=build_usage_boundary(session)
+    )
 
 
 TenantServiceDep = Annotated[TenantService, Depends(get_tenant_service)]

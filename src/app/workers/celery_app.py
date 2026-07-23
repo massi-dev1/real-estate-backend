@@ -57,6 +57,9 @@ celery_app.conf.update(
         # Analytics rollups/pruning/partition maintenance (§8.15): pure batch,
         # no human-facing latency — the queue this profile is named for.
         "app.workers.tasks.analytics.*": {"queue": "analytics"},
+        # Tenant lifecycle & billing sweeps (§8.16): dunning/trial/purge/export
+        # are batch back-office work — no human-facing latency.
+        "app.workers.tasks.tenants.*": {"queue": "analytics"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -139,5 +142,24 @@ celery_app.conf.beat_schedule = {
     "ensure-analytics-partitions": {
         "task": "app.workers.tasks.analytics.ensure_analytics_partitions",
         "schedule": crontab(hour=4, minute=30),
+    },
+    # Tenant lifecycle & billing sweeps (§8.16). Hourly dunning/trial checks keep
+    # suspension timely; the purge and domain re-check run daily. All idempotent
+    # (status filters / deleted-at guard).
+    "billing-dunning-sweep": {
+        "task": "app.workers.tasks.tenants.run_dunning_sweep",
+        "schedule": crontab(minute=0),
+    },
+    "expire-tenant-trials": {
+        "task": "app.workers.tasks.tenants.expire_trials",
+        "schedule": crontab(minute=15),
+    },
+    "purge-scheduled-tenants": {
+        "task": "app.workers.tasks.tenants.purge_scheduled_tenants",
+        "schedule": crontab(hour=5, minute=0),
+    },
+    "verify-pending-domains": {
+        "task": "app.workers.tasks.tenants.verify_pending_domains",
+        "schedule": crontab(hour=5, minute=30),
     },
 }
