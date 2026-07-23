@@ -22,10 +22,22 @@ services:
     env_file:
       - ../.env
     environment:
-      # Inside the compose network the backing services are reachable by name.
+      # Inside the compose network the backing services are reachable by their
+      # service name, NOT localhost — these override the localhost-based URLs an
+      # .env (copied from .env.example for local `uv run` dev) carries. In
+      # Compose, `environment` wins over `env_file`, so secrets stay in .env
+      # while the network topology is pinned here.
       APP_ENV: ${APP_ENV:-production}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://app_user:app_password@db:5432/realestate}
+      DATABASE_DDL_URL: ${DATABASE_DDL_URL:-postgresql+asyncpg://postgres:postgres@db:5432/realestate}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/2}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      STORAGE_ENDPOINT_URL: ${STORAGE_ENDPOINT_URL:-http://minio:9000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
     depends_on:
       db:
         condition: service_healthy
@@ -43,8 +55,18 @@ services:
     env_file:
       - ../.env
     environment:
+      # Same network-topology overrides as the app role (see above) — the
+      # worker reaches the backing services by service name, not localhost.
       APP_ENV: ${APP_ENV:-production}
       CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-2}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://app_user:app_password@db:5432/realestate}
+      DATABASE_DDL_URL: ${DATABASE_DDL_URL:-postgresql+asyncpg://postgres:postgres@db:5432/realestate}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/2}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      STORAGE_ENDPOINT_URL: ${STORAGE_ENDPOINT_URL:-http://minio:9000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
     depends_on:
       db:
         condition: service_healthy
@@ -61,8 +83,20 @@ services:
     env_file:
       - ../.env
     environment:
+      # beat only needs the broker/backend + DB, but it loads the same .env, so
+      # the localhost hosts must be overridden to the compose service names too.
       APP_ENV: ${APP_ENV:-production}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://app_user:app_password@db:5432/realestate}
+      DATABASE_DDL_URL: ${DATABASE_DDL_URL:-postgresql+asyncpg://postgres:postgres@db:5432/realestate}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/2}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/2}
+      STORAGE_ENDPOINT_URL: ${STORAGE_ENDPOINT_URL:-http://minio:9000}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
     depends_on:
+      db:
+        condition: service_healthy
       redis:
         condition: service_healthy
       app:
