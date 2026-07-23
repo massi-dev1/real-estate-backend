@@ -35,6 +35,15 @@ class UserRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    async def get_including_deleted(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID
+    ) -> User | None:
+        """Fetch a user even if soft-deleted — the compliance erasure purge
+        (§8.17) acts on a row that ``DELETE /me`` already soft-deleted, so the
+        normal ``get`` (which filters ``deleted_at IS NULL``) can't see it."""
+        stmt = select(User).where(_tenant_clause(tenant_id), User.id == user_id)
+        return (await self.session.execute(stmt)).scalar_one_or_none()
+
     async def list_page(
         self,
         tenant_id: uuid.UUID | None,

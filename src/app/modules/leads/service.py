@@ -951,6 +951,69 @@ class LeadsService:
         ``lead_exists``)."""
         return await self.repo.get_contact(tenant_id, contact_id) is not None
 
+    # ---- compliance boundary (§8.17): DSR export, erasure, retention ----
+
+    async def export_for_subject(
+        self, tenant_id: uuid.UUID, email: str
+    ) -> dict[str, Any]:
+        """Read-only dump of a subject's CRM footprint (§10.12): their contacts,
+        the leads on those contacts, and the leads' activity timeline. Keyed on
+        email — the buyer/seller identity that ties a portal account to its CRM
+        contact. The DSR export fans out to this instead of reading leads'
+        tables."""
+        contacts = await self.repo.contacts_by_email(tenant_id, email)
+        contact_ids = [c.id for c in contacts]
+        leads = await self.repo.leads_for_contacts(tenant_id, contact_ids)
+        activities = await self.repo.activities_for_leads(tenant_id, [lead.id for lead in leads])
+        return {
+            "contacts": [ContactOut.model_validate(c).model_dump(mode="json") for c in contacts],
+            "leads": [LeadOut.model_validate(lead).model_dump(mode="json") for lead in leads],
+            "activities": [
+                {
+                    "id": str(a.id),
+                    "lead_id": str(a.lead_id),
+                    "type": a.type.value,
+                    "payload": a.payload,
+                    "created_at": a.created_at.isoformat(),
+                }
+                for a in activities
+            ],
+        }
+
+    async def anonymize_subject(self, tenant_id: uuid.UUID, email: str) -> int:
+        """Erasure (§10.12): strip PII from every contact matching the subject's
+        email. Leaves the lead/activity *shape* (an agency's pipeline history is
+        a legitimate business record) but removes the person — name, email,
+        phone, notes, consent all cleared. Returns the number of contacts
+        anonymized."""
+        contacts = await self.repo.contacts_by_email(tenant_id, email)
+        for contact in contacts:
+            _anonymize_contact(contact)
+        await self.repo.flush()
+        return len(contacts)
+
+    async def anonymize_lost_leads(
+        self, tenant_id: uuid.UUID, *, before: datetime, limit: int = 500
+    ) -> int:
+        """Retention sweep (§8.17): anonymize the contacts of LOST leads not
+        touched since ``before`` (24 months). A lost lead's pipeline row is kept
+        for reporting, but the person's PII is removed. Returns contacts
+        anonymized. Idempotent — an already-anonymized contact (email NULL) is
+        re-cleared to the same empty state, so a re-run is a no-op in effect."""
+        leads = await self.repo.lost_leads_before(tenant_id, before=before, limit=limit)
+        contact_ids = {lead.contact_id for lead in leads}
+        contacts = await self.repo.contacts_by_ids(tenant_id, contact_ids)
+        anonymized = 0
+        for contact in contacts:
+            # Skip contacts already stripped (idempotent, and avoids re-touching
+            # updated_at on every nightly run).
+            if contact.email is None and contact.first_name is None and contact.phone is None:
+                continue
+            _anonymize_contact(contact)
+            anonymized += 1
+        await self.repo.flush()
+        return anonymized
+
     async def log_tour_activity(
         self, tenant_id: uuid.UUID, lead_id: uuid.UUID, payload: dict[str, Any]
     ) -> None:
@@ -1036,6 +1099,20 @@ def _capture_source_meta(data: _CaptureBase) -> dict[str, Any]:
         }.items()
         if v is not None
     }
+
+
+def _anonymize_contact(contact: Contact) -> None:
+    """Strip a contact's personal data in place (§8.17 erasure / retention).
+    Clears every PII field but keeps the row so leads/activities referencing it
+    stay structurally intact for reporting."""
+    contact.first_name = None
+    contact.last_name = None
+    contact.email = None
+    contact.phone = None
+    contact.whatsapp = None
+    contact.notes = None
+    contact.consent = {}
+    contact.tags = []
 
 
 def _decode_keyset(cursor: str) -> tuple[datetime, uuid.UUID]:

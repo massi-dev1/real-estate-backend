@@ -19,6 +19,7 @@ import app.modules.analytics.models
 import app.modules.appointments.models
 import app.modules.auth.models
 import app.modules.blog.models
+import app.modules.compliance.models
 import app.modules.content.models
 import app.modules.favorites.models
 import app.modules.leads.models

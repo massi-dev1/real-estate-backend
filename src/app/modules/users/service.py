@@ -237,6 +237,59 @@ class UserService:
         user.deleted_at = datetime.now(UTC)
         await self.repo.flush()
 
+    # ---- compliance boundary (§8.17): DSR self-service erasure ----
+
+    async def soft_delete_self(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> UserIdentity:
+        """A user erasing their own account (``DELETE /me``, §10.12) — the one
+        case where deleting oneself is allowed (``soft_delete`` above forbids it
+        as an admin lockout footgun). Returns the identity so the caller can
+        record the subject's email on the DSR record before the purge."""
+        user = await self._get_or_404(tenant_id, user_id)
+        identity = _to_identity(user)
+        user.deleted_at = datetime.now(UTC)
+        await self.repo.flush()
+        return identity
+
+    async def export_identity(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID
+    ) -> dict[str, object] | None:
+        """Read-only dump of the account row itself (§10.12) — no secrets
+        (password hash, MFA) ever leave this module."""
+        user = await self.repo.get_including_deleted(tenant_id, user_id)
+        if user is None:
+            return None
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "role": user.role.value,
+            "locale": user.locale,
+            "phone": user.phone,
+            "created_at": user.created_at.isoformat(),
+        }
+
+    async def anonymize_account(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
+        """Erasure purge (§10.12): scrub the PII off a soft-deleted account row
+        and free its email for reuse. The row is kept (FKs across the app point
+        at it — a hard delete would cascade or orphan business records), but the
+        person is removed: email is replaced by an opaque tombstone, name/phone
+        cleared, password rotated to an unusable value. Returns the original
+        email (so the caller can anonymize matching CRM contacts), or ``None``
+        if the row is already gone/anonymized."""
+        user = await self.repo.get_including_deleted(tenant_id, user_id)
+        if user is None or user.email.startswith("deleted+"):
+            return None
+        original_email = user.email
+        user.email = f"deleted+{user.id}@anonymized.invalid"
+        user.first_name = None
+        user.last_name = None
+        user.phone = None
+        user.password_hash = hash_password(uuid.uuid4().hex)
+        user.status = UserStatus.DISABLED
+        await self.repo.flush()
+        return original_email
+
     # ---- identity API consumed by the auth module ----
 
     async def verify_credentials(

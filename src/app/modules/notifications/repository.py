@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import datetime
 
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.notifications.models import (
@@ -29,6 +29,21 @@ class NotificationsRepository:
 
     async def flush(self) -> None:
         await self.session.flush()
+
+    # ---- compliance boundary (§8.17): DSR erasure ----
+
+    async def delete_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Hard-delete a user's notifications, preferences and pending digest
+        items (erasure §10.12) — transient in-app messages, no business record
+        to keep. ``notification_sends`` (a deliverability log) is left intact:
+        it holds no PII beyond an already-deleted notification reference and is
+        the audit record of what was attempted."""
+        for model in (Notification, NotificationPreference, NotificationDigestItem):
+            await self.session.execute(
+                delete(model).where(
+                    model.tenant_id == tenant_id, model.user_id == user_id
+                )
+            )
 
     # ---- in-app notifications ----
 

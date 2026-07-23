@@ -121,6 +121,31 @@ class FavoritesRepository:
         )
         return list((await self.session.execute(stmt)).scalars())
 
+    # ---- compliance boundary (§8.17): DSR export + erasure ----
+
+    async def all_favorites_for_user(
+        self, tenant_id: uuid.UUID, user_id: uuid.UUID
+    ) -> list[Favorite]:
+        stmt = select(Favorite).where(
+            Favorite.tenant_id == tenant_id, Favorite.user_id == user_id
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def delete_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
+        """Hard-delete a user's favorites + saved searches (erasure §10.12) —
+        these are personal preference rows with no business-record value to
+        retain, unlike a CRM lead."""
+        await self.session.execute(
+            delete(Favorite).where(
+                Favorite.tenant_id == tenant_id, Favorite.user_id == user_id
+            )
+        )
+        await self.session.execute(
+            delete(SavedSearch).where(
+                SavedSearch.tenant_id == tenant_id, SavedSearch.user_id == user_id
+            )
+        )
+
     def add(self, obj: Favorite | SavedSearch) -> None:
         self.session.add(obj)
 

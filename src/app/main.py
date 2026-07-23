@@ -27,6 +27,10 @@ from app.modules.appointments.router import public_router as appointments_public
 from app.modules.auth.router import auth_router, platform_auth_router
 from app.modules.blog.router import portal_router as blog_portal_router
 from app.modules.blog.router import public_router as blog_public_router
+from app.modules.compliance.router import me_router as compliance_me_router
+from app.modules.compliance.router import portal_router as compliance_portal_router
+from app.modules.compliance.router import public_router as compliance_public_router
+from app.modules.compliance.router import site_router as compliance_site_router
 from app.modules.content.router import portal_router as content_portal_router
 from app.modules.content.router import public_router as content_public_router
 from app.modules.favorites.router import me_router as favorites_me_router
@@ -113,6 +117,10 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(analytics_public_router)
     router.include_router(analytics_portal_router)
     router.include_router(analytics_listing_report_router)
+    router.include_router(compliance_public_router)
+    router.include_router(compliance_site_router)
+    router.include_router(compliance_me_router)
+    router.include_router(compliance_portal_router)
     return router
 
 

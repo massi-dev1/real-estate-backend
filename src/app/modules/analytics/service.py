@@ -45,6 +45,7 @@ from app.modules.analytics.schemas import (
     TrafficPointOut,
     TrafficSummaryOut,
 )
+from app.modules.compliance.service import ConsentGate, build_consent_gate
 from app.modules.leads.service import LeadsService, get_leads_service
 from app.modules.listings.service import ListingService, get_listing_service
 
@@ -91,20 +92,14 @@ class AnalyticsService:
         repo: AnalyticsRepository,
         listings: ListingService,
         leads: LeadsService,
+        consent: ConsentGate,
     ) -> None:
         self.repo = repo
         self.listings = listings
         self.leads = leads
+        self.consent = consent
 
     # ---- ingestion ----
-
-    def _consent_allows(self, tenant: TenantContext, user_id: uuid.UUID | None) -> bool:
-        """Consent gate seam (§10.12). §8.17 (cookie consent) hasn't shipped, so
-        there is no consent state to check yet — permissive for now. Part 23
-        wires the real check here (analytics ingestion must honour a
-        non-consenting session once a banner + consent records exist), per the
-        part's own TODO note."""
-        return True
 
     async def ingest(
         self,
@@ -112,29 +107,44 @@ class AnalyticsService:
         actor: AuthenticatedUser | None,
         data: EventBatchIn,
     ) -> int:
-        """Persist a validated batch of anonymous events. Returns the number
-        accepted (0 when consent gates it out — the client still gets a 202-shaped
-        ack, never told whether it was dropped)."""
-        if not self._consent_allows(tenant, actor.id if actor else None):
-            return 0
+        """Persist a validated batch of anonymous events, dropping any whose
+        (session/user) has not consented to analytics tracking (§8.17 — the gate
+        Part 21 left as a TODO). Returns the number *accepted*; the client gets a
+        202-shaped ack either way and is never told whether a drop happened.
+
+        Consent is per-session, so a mixed batch is filtered event-by-event; the
+        result is cached per session id within one batch to avoid re-querying."""
         user_id = actor.id if actor else None
-        events = [
-            AnalyticsEvent(
-                tenant_id=tenant.id,
-                event_type=event.event_type.value,
-                session_id=event.session_id,
-                user_id=user_id,
-                listing_id=event.listing_id,
-                source=event.source,
-                # The validated, typed payload minus the envelope fields already
-                # stored in their own columns — never raw client JSON.
-                payload=event.model_dump(
-                    mode="json",
-                    exclude={"event_type", "session_id", "listing_id", "source"},
-                ),
+        allowed_sessions: dict[str | None, bool] = {}
+        events: list[AnalyticsEvent] = []
+        for event in data.events:
+            session_id = event.session_id
+            allowed = allowed_sessions.get(session_id)
+            if allowed is None:
+                allowed = await self.consent.analytics_allowed(
+                    tenant, user_id=user_id, session_id=session_id
+                )
+                allowed_sessions[session_id] = allowed
+            if not allowed:
+                continue
+            events.append(
+                AnalyticsEvent(
+                    tenant_id=tenant.id,
+                    event_type=event.event_type.value,
+                    session_id=session_id,
+                    user_id=user_id,
+                    listing_id=event.listing_id,
+                    source=event.source,
+                    # The validated, typed payload minus the envelope fields
+                    # already stored in their own columns — never raw client JSON.
+                    payload=event.model_dump(
+                        mode="json",
+                        exclude={"event_type", "session_id", "listing_id", "source"},
+                    ),
+                )
             )
-            for event in data.events
-        ]
+        if not events:
+            return 0
         self.repo.add_events(events)
         await self.repo.session.flush()
         return len(events)
@@ -368,17 +378,19 @@ def get_analytics_service(session: SessionDep) -> AnalyticsService:
         AnalyticsRepository(session),
         get_listing_service(session),
         get_leads_service(session),
+        build_consent_gate(session),
     )
 
 
 def build_analytics_service_for_worker(session: AsyncSession) -> AnalyticsService:
     """Worker-side construction (no ``request``). The rollup/prune/partition
     paths never need HTTP context — they read the raw table and leads' boundary
-    and write the rollups."""
+    and write the rollups. The consent gate is unused off the ingestion path."""
     return AnalyticsService(
         AnalyticsRepository(session),
         get_listing_service(session),
         get_leads_service(session),
+        build_consent_gate(session),
     )
 
 

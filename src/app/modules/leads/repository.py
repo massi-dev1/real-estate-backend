@@ -310,6 +310,60 @@ class LeadsRepository:
         drip.stopped_at = datetime.now(UTC)
         drip.stopped_reason = reason
 
+    # ---- compliance boundary (§8.17): DSR export, erasure, retention ----
+
+    async def contacts_by_email(self, tenant_id: uuid.UUID, email: str) -> list[Contact]:
+        """Contacts whose email matches (case-insensitive) — the DSR subject
+        lookup keys on email (the buyer/seller identity that ties a portal
+        account to its CRM contact)."""
+        stmt = select(Contact).where(
+            Contact.tenant_id == tenant_id, func.lower(Contact.email) == email.lower()
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def leads_for_contacts(
+        self, tenant_id: uuid.UUID, contact_ids: Collection[uuid.UUID]
+    ) -> list[Lead]:
+        if not contact_ids:
+            return []
+        stmt = select(Lead).where(
+            Lead.tenant_id == tenant_id, Lead.contact_id.in_(list(contact_ids))
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def activities_for_leads(
+        self, tenant_id: uuid.UUID, lead_ids: Collection[uuid.UUID]
+    ) -> list[LeadActivity]:
+        if not lead_ids:
+            return []
+        stmt = (
+            select(LeadActivity)
+            .where(
+                LeadActivity.tenant_id == tenant_id,
+                LeadActivity.lead_id.in_(list(lead_ids)),
+            )
+            .order_by(LeadActivity.created_at)
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def lost_leads_before(
+        self, tenant_id: uuid.UUID, *, before: datetime, limit: int
+    ) -> list[Lead]:
+        """LOST leads not touched since ``before`` (the retention cutoff) whose
+        contact still carries PII — the 24-month anonymization sweep target.
+        ``updated_at`` is the "last touched" signal (a lost lead is inert)."""
+        stmt = (
+            select(Lead)
+            .where(
+                Lead.tenant_id == tenant_id,
+                Lead.stage == LeadStage.LOST,
+                Lead.updated_at <= before,
+            )
+            .order_by(Lead.updated_at)
+            .limit(limit)
+        )
+        return list((await self.session.execute(stmt)).scalars())
+
     # ---- generic ----
 
     def add(self, obj: Contact | Lead | LeadActivity | AssignmentRule | LeadDripState) -> None:

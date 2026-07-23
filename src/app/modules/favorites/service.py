@@ -17,6 +17,7 @@ import structlog
 from fastapi import Depends, Request
 from pydantic import ValidationError
 from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.database import SessionDep, on_commit
@@ -269,6 +270,20 @@ class FavoritesService:
             row.is_active = True
             await self.repo.flush()
             await self.leads.register_signup_lead(tenant, row.email)
+            # Record the double-opt-in as an append-only marketing-consent proof
+            # (§8.17): the confirmed opt-in *is* the marketing consent, so the
+            # compliance trail must capture it. Lazy import breaks the
+            # compliance→favorites service cycle (compliance composes favorites).
+            from app.modules.compliance.models import ConsentCategory
+            from app.modules.compliance.service import build_consent_recorder
+
+            await build_consent_recorder(self.repo.session).record(
+                tenant,
+                category=ConsentCategory.MARKETING,
+                granted=True,
+                source="saved_search_signup",
+                email=row.email,
+            )
         return row
 
     def unsubscribe_token(self, saved_search_id: uuid.UUID) -> str:
@@ -291,6 +306,37 @@ class FavoritesService:
         if row is not None and row.is_active:
             row.is_active = False
             await self.repo.flush()
+
+    # ---- compliance boundary (§8.17): DSR export + erasure ----
+
+    async def export_for_user(
+        self, tenant: TenantContext, user_id: uuid.UUID
+    ) -> dict[str, object]:
+        """Read-only dump of a user's favorites + saved searches (§10.12). The
+        DSR export fans out to this instead of reading favorites' tables."""
+        favorites = await self.repo.all_favorites_for_user(tenant.id, user_id)
+        searches = await self.repo.list_saved_searches(tenant.id, user_id)
+        return {
+            "favorites": [
+                {"listing_id": str(f.listing_id), "created_at": f.created_at.isoformat()}
+                for f in favorites
+            ],
+            "saved_searches": [
+                {
+                    "id": str(s.id),
+                    "name": s.name,
+                    "filters": s.filters,
+                    "frequency": s.frequency.value,
+                    "created_at": s.created_at.isoformat(),
+                }
+                for s in searches
+            ],
+        }
+
+    async def erase_for_user(self, tenant: TenantContext, user_id: uuid.UUID) -> None:
+        """Erasure (§10.12): hard-delete a user's favorites + saved searches —
+        personal preferences with no business-record value to retain."""
+        await self.repo.delete_all_for_user(tenant.id, user_id)
 
     # ---- alert matching (driven by workers/tasks/favorites.py) ----
 
@@ -413,6 +459,17 @@ def get_favorites_service(session: SessionDep, request: Request) -> FavoritesSer
         leads=get_leads_service(session),
         redis=request.app.state.redis,
         settings=request.app.state.settings,
+    )
+
+
+def build_favorites_boundary(session: AsyncSession) -> FavoritesService:
+    """Dependent composition (compliance §8.17 DSR export/erasure): the
+    export/erase paths only touch favorites' own tables, so the redis/settings/
+    leads deps (signup + alert flows) are left unwired."""
+    return FavoritesService(
+        FavoritesRepository(session),
+        get_listing_service(session),
+        get_user_service(session),
     )
 
 

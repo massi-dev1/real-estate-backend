@@ -60,6 +60,9 @@ celery_app.conf.update(
         # Tenant lifecycle & billing sweeps (§8.16): dunning/trial/purge/export
         # are batch back-office work — no human-facing latency.
         "app.workers.tasks.tenants.*": {"queue": "analytics"},
+        # Compliance retention & DSR sweeps (§8.17): erasure purge + lost-lead
+        # anonymization — batch back-office, same class as the retention jobs.
+        "app.workers.tasks.compliance.*": {"queue": "analytics"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -161,5 +164,19 @@ celery_app.conf.beat_schedule = {
     "verify-pending-domains": {
         "task": "app.workers.tasks.tenants.verify_pending_domains",
         "schedule": crontab(hour=5, minute=30),
+    },
+    # Compliance sweeps (§8.17). The erasure purge runs daily (a 30-day grace
+    # window means day-grain is timely enough); the 24-month lost-lead
+    # anonymization runs weekly (a slow-moving retention horizon). Both
+    # idempotent (status / already-anonymized guards). The 90-day raw-analytics
+    # prune already lives under `prune-analytics-events` (§8.15) — not
+    # duplicated here.
+    "purge-due-erasures": {
+        "task": "app.workers.tasks.compliance.purge_due_erasures",
+        "schedule": crontab(hour=6, minute=0),
+    },
+    "anonymize-stale-lost-leads": {
+        "task": "app.workers.tasks.compliance.anonymize_stale_lost_leads",
+        "schedule": crontab(day_of_week=1, hour=6, minute=30),
     },
 }

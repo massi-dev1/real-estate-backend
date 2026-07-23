@@ -272,6 +272,33 @@ class NotificationsService:
                 row.read_at = now
         await self.repo.flush()
 
+    # ---- compliance boundary (§8.17): DSR export + erasure ----
+
+    async def export_for_user(
+        self, tenant: TenantContext, user_id: uuid.UUID
+    ) -> dict[str, object]:
+        """Read-only dump of a user's in-app notifications (§10.12)."""
+        rows = await self.repo.list_for_user(
+            tenant.id, user_id, unread_only=False, after=None, limit=1000
+        )
+        return {
+            "notifications": [
+                {
+                    "id": str(n.id),
+                    "type": n.type.value,
+                    "payload": n.payload,
+                    "read_at": n.read_at.isoformat() if n.read_at else None,
+                    "created_at": n.created_at.isoformat(),
+                }
+                for n in rows
+            ]
+        }
+
+    async def erase_for_user(self, tenant: TenantContext, user_id: uuid.UUID) -> None:
+        """Erasure (§10.12): delete a user's notifications, preferences and
+        pending digest items."""
+        await self.repo.delete_all_for_user(tenant.id, user_id)
+
     # ---- preferences ----
 
     async def get_preferences(

@@ -63,6 +63,11 @@ class Permission(enum.StrEnum):
     # lead-funnel / source dashboards are tenant-wide aggregates (all read from
     # rollup tables, never raw events); the per-listing report is further
     # visibility-scoped via the listings boundary (agent → own, team_lead → team).
+    COMPLIANCE_MANAGE = "compliance:manage"  # cookie-consent config + the audit-access
+    # report (§8.17). A data-protection / admin concern — granted to admin only.
+    # DSR export/erasure is a self-service /me surface (ownership is the auth),
+    # not gated by this; this permission gates the *tenant-wide* compliance
+    # tooling (banner config, audit-log review).
     DEAL_MANAGE = "deal:manage"  # create/edit deals + milestones + documents (§8.13),
     # within the actor's scope (agent → own, team_lead → team, admin → tenant-wide).
     # Deliberately NOT granted to marketing — commissions are sensitive, and a
@@ -129,6 +134,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.REVIEW_MODERATE,
             Permission.DEAL_MANAGE,
             Permission.ANALYTICS_VIEW,
+            Permission.COMPLIANCE_MANAGE,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),
