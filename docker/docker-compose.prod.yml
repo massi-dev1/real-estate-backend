@@ -1,0 +1,90 @@
+# Production application stack (§16), layered OVER docker-compose.yml.
+#
+# The base compose (docker-compose.yml) provides the backing services —
+# Postgres/PostGIS, Redis, MinIO. This file adds the deployable app roles
+# (api, worker, beat) and the Caddy edge. Run both together:
+#
+#   docker compose -f docker/docker-compose.yml \
+#                  -f docker/docker-compose.prod.yml up -d --build
+#
+# One built image serves all three app roles; only the role command differs.
+# Secrets come from the environment / an env file — never baked into the image.
+
+name: real-estate-backend
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: real-estate-backend:latest
+    command: ["api"]
+    env_file:
+      - ../.env
+    environment:
+      # Inside the compose network the backing services are reachable by name.
+      APP_ENV: ${APP_ENV:-production}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  worker:
+    image: real-estate-backend:latest
+    command: ["worker"]
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      CELERY_CONCURRENCY: ${CELERY_CONCURRENCY:-2}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # The worker never migrates; it waits for the api role to have done so.
+      app:
+        condition: service_started
+    restart: unless-stopped
+
+  beat:
+    image: real-estate-backend:latest
+    command: ["beat"]
+    env_file:
+      - ../.env
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+    depends_on:
+      redis:
+        condition: service_healthy
+      app:
+        condition: service_started
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-admin@example.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

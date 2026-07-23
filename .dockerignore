@@ -1,0 +1,35 @@
+# Keep the build context small and secret-free (§16).
+# The Dockerfile copies only pyproject.toml, uv.lock, src/, alembic/,
+# alembic.ini, and docker/entrypoint.sh — everything else is noise or risk.
+
+# Virtualenv & caches
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Secrets & local env
+.env
+.env.*
+!.env.example
+
+# VCS & tooling
+.git/
+.gitignore
+.gitattributes
+.github/
+.claude/
+graphify-out/
+.DS_Store
+
+# Tests & docs (not needed in the runtime image)
+tests/
+*.md
+
+# Docker artifacts (avoid recursive context)
+docker/data/

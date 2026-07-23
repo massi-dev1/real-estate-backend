@@ -1,0 +1,7 @@
+# Shell scripts and the Caddyfile must keep LF endings so they run inside the
+# Linux container even when the repo is checked out on Windows (CRLF would
+# break the shebang / entrypoint).
+*.sh text eol=lf
+docker/entrypoint.sh text eol=lf
+Caddyfile text eol=lf
+docker/Caddyfile text eol=lf

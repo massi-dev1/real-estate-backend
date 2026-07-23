@@ -16,6 +16,7 @@ from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddlew
 from app.core.storage import create_storage
 from app.core.tenancy import TenantResolutionMiddleware
 from app.health import router as health_router
+from app.internal import router as internal_router
 from app.modules.agents.router import portal_router as agents_portal_router
 from app.modules.agents.router import public_router as agents_public_router
 from app.modules.agents.router import teams_router
@@ -154,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     register_exception_handlers(app)
 
     app.include_router(health_router)
+    app.include_router(internal_router)
     app.include_router(build_api_v1_router())
     return app
 

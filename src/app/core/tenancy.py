@@ -20,9 +20,13 @@ logger = structlog.get_logger(__name__)
 
 # Paths served without a tenant: infra endpoints, the platform back-office, and
 # the billing webhook (verified by signature, §10.9 — no tenant context).
+# ``/internal`` carries edge-support endpoints (e.g. Caddy's on-demand-TLS
+# ask handler, §16) that are called *about* a domain, not *for* one, and are
+# never exposed past the reverse proxy's private network.
 TENANT_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/healthz",
     "/readyz",
+    "/internal",
     "/docs",
     "/openapi.json",
     "/api/v1/platform",
