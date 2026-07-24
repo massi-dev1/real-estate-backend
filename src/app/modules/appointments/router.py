@@ -13,6 +13,7 @@ from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query, Response, status
 
+from app.core.idempotency import IdempotentRoute
 from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.permissions import AuthenticatedUser, CurrentUserDep, Permission, require
 from app.core.rate_limit import rate_limit
@@ -31,6 +32,11 @@ from app.modules.appointments.schemas import (
 from app.modules.appointments.service import AppointmentsServiceDep
 
 public_router = APIRouter(tags=["appointments:public"])
+# Its own router so the booking POST alone gets Idempotency-Key handling
+# (§9) — the pg_advisory_xact_lock in service.book() already kills a true
+# double-booking race, but a client retry after a dropped response would
+# otherwise still create a second, distinct appointment for the same slot.
+booking_idempotent_router = APIRouter(tags=["appointments:public"], route_class=IdempotentRoute)
 
 _booking_limit = rate_limit(key_prefix="tour_booking", limit=5, window_seconds=60)
 
@@ -46,7 +52,7 @@ async def get_slots(
     return [SlotOut(start_at=s, end_at=e) for s, e in slots]
 
 
-@public_router.post(
+@booking_idempotent_router.post(
     "/agents/{slug}/appointments",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(_booking_limit)],

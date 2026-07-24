@@ -94,6 +94,17 @@ class InvalidWebhookError(AppError):
     title = "Invalid Webhook"
 
 
+class IdempotencyConflictError(AppError):
+    """The same ``Idempotency-Key`` is already in flight for this request
+    (§9) — a concurrent duplicate, not a replay (a replay returns the cached
+    response instead of raising). The caller should retry once the first
+    attempt finishes rather than assume this one failed."""
+
+    status_code = status.HTTP_409_CONFLICT
+    slug = "idempotency-key-in-flight"
+    title = "Duplicate Request In Flight"
+
+
 class UpstreamUnavailableError(AppError):
     """A third-party dependency (e.g. an AI provider, §8.18) failed or timed
     out. Surfaced as 503 problem+json so the client can retry — never a 500 or

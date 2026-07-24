@@ -26,6 +26,9 @@ from app.modules.agents.router import teams_router
 from app.modules.analytics.router import listing_report_router as analytics_listing_report_router
 from app.modules.analytics.router import portal_router as analytics_portal_router
 from app.modules.analytics.router import public_router as analytics_public_router
+from app.modules.appointments.router import (
+    booking_idempotent_router as appointments_booking_idempotent_router,
+)
 from app.modules.appointments.router import portal_router as appointments_portal_router
 from app.modules.appointments.router import public_router as appointments_public_router
 from app.modules.auth.router import auth_router, platform_auth_router
@@ -39,6 +42,7 @@ from app.modules.content.router import portal_router as content_portal_router
 from app.modules.content.router import public_router as content_public_router
 from app.modules.favorites.router import me_router as favorites_me_router
 from app.modules.favorites.router import public_router as favorites_public_router
+from app.modules.leads.router import capture_idempotent_router as leads_capture_idempotent_router
 from app.modules.leads.router import capture_router as leads_capture_router
 from app.modules.leads.router import portal_router as leads_portal_router
 from app.modules.listings.router import portal_router as listings_portal_router
@@ -53,6 +57,9 @@ from app.modules.syndication.router import feeds_router as syndication_feeds_rou
 from app.modules.syndication.router import portal_router as syndication_portal_router
 from app.modules.tenants.router import billing_webhook_router as tenants_billing_webhook_router
 from app.modules.tenants.router import platform_admin_router as tenants_platform_admin_router
+from app.modules.tenants.router import (
+    platform_billing_idempotent_router as tenants_platform_billing_idempotent_router,
+)
 from app.modules.tenants.router import platform_router as tenants_platform_router
 from app.modules.tenants.router import site_router as tenants_site_router
 from app.modules.tenants.service import DomainTenantResolver
@@ -96,6 +103,7 @@ def build_api_v1_router() -> APIRouter:
     """All module routers mount here as parts land (tenants, auth, listings, ...)."""
     router = APIRouter(prefix="/api/v1")
     router.include_router(tenants_platform_router)
+    router.include_router(tenants_platform_billing_idempotent_router)
     router.include_router(tenants_platform_admin_router)
     router.include_router(tenants_billing_webhook_router)
     router.include_router(tenants_site_router)
@@ -108,6 +116,7 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(listings_seo_router)
     router.include_router(media_portal_router)
     router.include_router(leads_capture_router)
+    router.include_router(leads_capture_idempotent_router)
     router.include_router(leads_portal_router)
     router.include_router(agents_public_router)
     router.include_router(agents_portal_router)
@@ -115,6 +124,7 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(favorites_me_router)
     router.include_router(favorites_public_router)
     router.include_router(appointments_public_router)
+    router.include_router(appointments_booking_idempotent_router)
     router.include_router(appointments_portal_router)
     router.include_router(valuations_public_router)
     router.include_router(content_public_router)

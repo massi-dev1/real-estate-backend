@@ -7,6 +7,7 @@ import os
 # Must be set before anything imports app.core.config.
 os.environ["APP_ENV"] = "local"
 os.environ["APP_SECRET_KEY"] = "test-secret-key-0123456789abcdef0123456789abcdef"
+os.environ["FIELD_ENCRYPTION_KEY"] = "test-field-key-fedcba9876543210fedcba9876543210"
 os.environ["DATABASE_URL"] = (
     "postgresql+asyncpg://app_user:app_password@localhost:5432/realestate_test"
 )

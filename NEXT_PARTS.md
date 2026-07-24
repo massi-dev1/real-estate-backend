@@ -8,12 +8,14 @@ then paste that part's prompt below to Claude as-is (or lightly adapt).
 Parts 25–33 are the **production-hardening phases** that close the cross-cutting
 blueprint concerns deferred out of the module parts: §10 security, §11 caching,
 §13 test infra, §14 observability, §15 CI/CD, §16 deployment, §18 checklist.
-**Parts 25 (deployment), 26 (CI/CD) and 27 (observability) are done.**
+**Parts 25 (deployment), 26 (CI/CD), 27 (observability), 28 (edge security) and
+30 (data-protection primitives) are done.**
 The full plan lives at
 `~/.claude/plans/okay-build-a-workflow-lucky-crayon.md`.
 
-**Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → **30 → 29** → 31 → 32 → 33.
-(Part 30's crypto helper must exist before Part 29 field-encrypts the MFA secret.)
+**Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → 30 → **29** → 31 → 32 → 33.
+(Part 30's crypto helper now exists — `core/crypto.py`'s `EncryptedString` —
+so Part 29 can field-encrypt the MFA secret with it.)
 
 General rules that apply to every part (already in `CLAUDE.md`, repeated here so
 they're not missed): one part at a time; query `graphify-out/` before searching
@@ -26,27 +28,6 @@ offline-safe defaults for any third-party seam (stub/flag off with no creds, sam
 stance as the AI/billing stubs). Run `uv run pytest` + `uv run ruff check` +
 `uv run ruff format --check` + `uv run mypy` all green, update the Build progress
 log, then commit — code review and graph updates stay manual (done by the user).
-
----
-
-
-## Part 30 — Data-protection primitives: field encryption + Idempotency-Key (§10.7, §9)
-
-Build two reusable security primitives other parts consume (this lands **before**
-Part 29 because MFA field-encrypts its TOTP secret with the helper here). Add
-`cryptography` as a dep. **`core/crypto.py`** — AES-GCM field encryption with a
-key from config (`field_encryption_key`, fail-fast like `app_secret_key`) and an
-`EncryptedString` SQLAlchemy `TypeDecorator` for reversible secrets (MFA secrets,
-future provider tokens); make it key-rotation-ready (a versioned key-id prefix on
-the ciphertext). **`core/idempotency.py`** — an `Idempotency-Key` header
-facility (§9): for POSTs carrying the header, cache the response in Redis (24h)
-keyed by tenant+user+key+route; a replay returns the stored response, an
-in-flight duplicate gets a 409 (add an `AppError` subclass if the conflict needs
-its own shape). Wire it on the money/duplicate-sensitive POSTs (lead capture,
-appointment booking, billing checkout). Tests: encrypt→store→decrypt round-trip +
-ciphertext ≠ plaintext in the DB; a repeated Idempotency-Key returns the
-identical cached response and creates exactly one row; a concurrent duplicate
-409s. Update the log and commit.
 
 ---
 

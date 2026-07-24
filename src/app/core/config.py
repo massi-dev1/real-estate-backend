@@ -134,6 +134,21 @@ class Settings(BaseSettings):
     global_rate_limit_per_minute: int = 300
     auth_rate_limit_per_minute: int = 10
 
+    # Field-level encryption (§10.7): AES-GCM secrets-at-rest for reversible
+    # values (MFA TOTP secrets, Part 29; future provider tokens). No default —
+    # same fail-fast rule as APP_SECRET_KEY, and deliberately a *different*
+    # key so rotating one never touches the other. ``field_encryption_key_id``
+    # names the *current* key for new ciphertext; ``field_encryption_keys``
+    # (JSON map of id -> key) adds prior key ids so already-encrypted rows
+    # keep decrypting through a rotation — empty means "current key only".
+    field_encryption_key: str = Field(min_length=32)
+    field_encryption_key_id: str = "v1"
+    field_encryption_keys: str = ""
+
+    # Idempotency-Key (§9): replay a POST's cached response instead of
+    # re-executing it. 24h covers a client retrying well after a timeout.
+    idempotency_key_ttl_seconds: int = 86_400
+
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".
     problem_type_base: str = "https://api.realestate.example/errors/"
 

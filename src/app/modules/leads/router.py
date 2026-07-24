@@ -11,6 +11,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.core.idempotency import IdempotentRoute
 from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.permissions import AuthenticatedUser, Permission, require
 from app.core.rate_limit import rate_limit
@@ -45,11 +46,18 @@ def _lead_detail(lead: Lead, contact: Contact) -> LeadDetailOut:
 
 
 capture_router = APIRouter(prefix="/leads", tags=["leads:public"])
+# A dedicated router so /leads/capture alone gets Idempotency-Key handling
+# (§9) — a client retrying after a timeout must get back the same lead, not
+# a second one. include_router() can't override one route's class, so the
+# route sits on its own tiny router instead.
+capture_idempotent_router = APIRouter(
+    prefix="/leads", tags=["leads:public"], route_class=IdempotentRoute
+)
 
 _capture_limit = rate_limit(key_prefix="lead_capture", limit=5, window_seconds=60)
 
 
-@capture_router.post(
+@capture_idempotent_router.post(
     "/capture", status_code=status.HTTP_201_CREATED, dependencies=[Depends(_capture_limit)]
 )
 async def capture_lead(

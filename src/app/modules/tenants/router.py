@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.core.database import SessionDep
 from app.core.exceptions import InvalidWebhookError
+from app.core.idempotency import IdempotentRoute
 from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.pagination import decode_cursor as _decode_cursor
 from app.core.pagination import encode_cursor as _encode_cursor
@@ -53,6 +54,15 @@ platform_router = APIRouter(
     dependencies=[Depends(require(Permission.PLATFORM_TENANT_VIEW))],
 )
 _manage = Depends(require(Permission.PLATFORM_TENANT_MANAGE))
+# Same prefix/RBAC as platform_router, split off only so the checkout POST
+# gets Idempotency-Key handling (§9) — a retried checkout call must not open
+# a second billing-provider session for the same tenant.
+platform_billing_idempotent_router = APIRouter(
+    prefix="/platform/tenants",
+    tags=["platform:tenants"],
+    dependencies=[Depends(require(Permission.PLATFORM_TENANT_VIEW))],
+    route_class=IdempotentRoute,
+)
 
 
 @platform_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[_manage])
@@ -154,7 +164,7 @@ async def get_subscription(
     return SubscriptionOut.model_validate(subscription) if subscription else None
 
 
-@platform_router.post(
+@platform_billing_idempotent_router.post(
     "/{tenant_id}/checkout", status_code=status.HTTP_201_CREATED, dependencies=[_manage]
 )
 async def start_checkout(
