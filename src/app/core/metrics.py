@@ -68,6 +68,15 @@ NOTIFICATION_SENDS = Counter(
     "rate is sent / (sent + failed).",
     ["channel", "status"],
 )
+# Application-level cache-aside outcomes (§11), distinct from the Redis-server
+# ``cache_hit_ratio`` gauge below: this counts *our* cache_aside lookups, so the
+# effectiveness of a specific cached read (site config, content pages, facets)
+# is queryable per entity as `rate(app_cache_lookups_total{result="hit"})`.
+CACHE_LOOKUPS = Counter(
+    "app_cache_lookups_total",
+    "Application cache_aside lookups by entity and result (hit/miss).",
+    ["entity", "result"],
+)
 
 # ---- infrastructure gauges (sampled at scrape time) ----
 
@@ -91,6 +100,11 @@ def record_lead_created(source: str) -> None:
 def record_notification_send(channel: str, status: str) -> None:
     """Called from the notification delivery task on every attempt (§14)."""
     NOTIFICATION_SENDS.labels(channel=channel, status=status).inc()
+
+
+def record_cache_lookup(entity: str, *, hit: bool) -> None:
+    """Called from :func:`app.core.cache.cache_aside` on every lookup (§11)."""
+    CACHE_LOOKUPS.labels(entity=entity, result="hit" if hit else "miss").inc()
 
 
 def _route_template(scope: Scope) -> str:

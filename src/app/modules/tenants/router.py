@@ -12,6 +12,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
+from app.core.cache import cache_aside
 from app.core.database import SessionDep
 from app.core.exceptions import InvalidWebhookError
 from app.core.idempotency import IdempotentRoute
@@ -276,30 +277,53 @@ site_router = APIRouter(prefix="/site", tags=["site"])
 
 
 @site_router.get("/config")
-async def get_site_config(tenant: TenantDep, service: TenantServiceDep) -> SiteConfigOut:
+async def get_site_config(
+    request: Request, tenant: TenantDep, service: TenantServiceDep
+) -> SiteConfigOut:
     """Public branding/config for the resolved tenant. Part 22 (§8.16) adds the
     plan + current usage + limits so the dashboard shows quota consumption in
     one call; the usage read is the only DB hit (the rest is the cached
-    context)."""
-    snapshot = await service.usage_snapshot(tenant.id)
-    limits = plan_limits(tenant.plan)
-    return SiteConfigOut(
-        name=tenant.name,
-        slug=tenant.slug,
-        settings=tenant.settings,
-        plan=tenant.plan,
-        usage=UsageOut(
-            listings_count=snapshot.listings_count,
-            agents_count=snapshot.agents_count,
-            storage_bytes=snapshot.storage_bytes,
-            emails_sent=snapshot.emails_sent,
-        ),
-        limits=PlanLimitsOut(
-            max_listings=limits.max_listings,
-            max_agents=limits.max_agents,
-            storage_gb=limits.storage_gb,
-            monthly_emails=limits.monthly_emails,
-        ),
+    context).
+
+    Cached for :data:`cache_site_config_ttl_seconds` (§11) — this is one of the
+    hottest anonymous reads (every page load fetches branding). Invalidated on
+    the tenant's settings/plan writes via the ``site_config`` version bump in
+    :class:`TenantService`; usage counters may lag by the TTL, which is fine for
+    a dashboard display."""
+    settings = request.app.state.settings
+
+    async def _load() -> SiteConfigOut:
+        snapshot = await service.usage_snapshot(tenant.id)
+        limits = plan_limits(tenant.plan)
+        return SiteConfigOut(
+            name=tenant.name,
+            slug=tenant.slug,
+            settings=tenant.settings,
+            plan=tenant.plan,
+            usage=UsageOut(
+                listings_count=snapshot.listings_count,
+                agents_count=snapshot.agents_count,
+                storage_bytes=snapshot.storage_bytes,
+                emails_sent=snapshot.emails_sent,
+            ),
+            limits=PlanLimitsOut(
+                max_listings=limits.max_listings,
+                max_agents=limits.max_agents,
+                storage_gb=limits.storage_gb,
+                monthly_emails=limits.monthly_emails,
+            ),
+        )
+
+    return await cache_aside(
+        request.app.state.redis,
+        tenant_id=str(tenant.id),
+        entity="site_config",
+        ident="_",
+        ttl_seconds=settings.cache_site_config_ttl_seconds,
+        loader=_load,
+        serialize=lambda v: v.model_dump(mode="json"),
+        deserialize=SiteConfigOut.model_validate,
+        enabled=settings.cache_enabled,
     )
 
 

@@ -16,9 +16,11 @@ from typing import Annotated, Any
 
 import structlog
 from fastapi import Depends, Request
+from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
 
 from app.common.geo import multipolygon_rings, to_multipolygon
+from app.core.cache import bump_version
 from app.core.config import Settings
 from app.core.database import SessionDep, on_commit
 from app.core.exceptions import ConflictError, NotFoundError
@@ -68,12 +70,25 @@ class ContentService:
         listings: ListingService,
         leads: LeadsService,
         storage: ObjectStorage,
+        redis: Redis | None = None,
     ) -> None:
         self.repo = repo
         self._settings = settings  # HMAC preview-token signing only
         self.listings = listings
         self.leads = leads
         self.storage = storage
+        self._redis = redis
+
+    def _invalidate_public_after_commit(self, tenant_id: uuid.UUID, entity: str) -> None:
+        """Bump a public-content cache version after commit (§11), so a
+        publish/edit/delete retires the cached ``GET`` for that entity. Redis
+        may be absent in a worker context, in which case this is a no-op —
+        worker paths don't serve the cached public reads."""
+
+        async def _bump() -> None:
+            await bump_version(self._redis, str(tenant_id), entity)
+
+        on_commit(self.repo.session, _bump)
 
     # ---- pages: portal ----
 
@@ -92,6 +107,7 @@ class ContentService:
             await self.repo.flush()
         except IntegrityError as exc:
             raise ConflictError("A page with this slug already exists.") from exc
+        self._invalidate_public_after_commit(tenant.id, "content_page")
         return page
 
     async def get_page(self, tenant: TenantContext, page_id: uuid.UUID) -> ContentPage:
@@ -142,6 +158,7 @@ class ContentService:
             await self.repo.flush()
         except IntegrityError as exc:
             raise ConflictError("A page with this slug already exists.") from exc
+        self._invalidate_public_after_commit(tenant.id, "content_page")
         return page
 
     async def publish_page(self, tenant: TenantContext, page_id: uuid.UUID) -> ContentPage:
@@ -151,6 +168,7 @@ class ContentService:
             if page.published_at is None:
                 page.published_at = datetime.now(UTC)
             await self.repo.flush()
+            self._invalidate_public_after_commit(tenant.id, "content_page")
         return page
 
     async def unpublish_page(self, tenant: TenantContext, page_id: uuid.UUID) -> ContentPage:
@@ -158,12 +176,14 @@ class ContentService:
         if page.status != PageStatus.DRAFT:
             page.status = PageStatus.DRAFT
             await self.repo.flush()
+            self._invalidate_public_after_commit(tenant.id, "content_page")
         return page
 
     async def delete_page(self, tenant: TenantContext, page_id: uuid.UUID) -> None:
         page = await self.get_page(tenant, page_id)
         await self.repo.delete_page(page)
         await self.repo.flush()
+        self._invalidate_public_after_commit(tenant.id, "content_page")
 
     def preview_token(self, tenant: TenantContext, page: ContentPage) -> str:
         return sign_value(_PREVIEW_PURPOSE, f"{tenant.id}:{page.id}", self._settings)
@@ -226,6 +246,7 @@ class ContentService:
         except IntegrityError as exc:
             # Lost the race to another publisher between the flip and insert.
             raise ConflictError("A newer version was just published; retry.") from exc
+        self._invalidate_public_after_commit(tenant.id, "legal")
         return page
 
     async def get_current_legal(self, tenant: TenantContext, kind: LegalKind) -> LegalPage:
@@ -536,6 +557,7 @@ def get_content_service(session: SessionDep, request: Request) -> ContentService
         get_listing_service(session),
         get_leads_service(session),
         request.app.state.storage,
+        redis=request.app.state.redis,
     )
 
 

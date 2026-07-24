@@ -7,12 +7,16 @@
   service/repository (§7.2).
 """
 
+import hashlib
+import json
 import uuid
 from typing import Annotated
 from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 
+from app.core.cache import cache_aside
+from app.core.http_cache import cached_json_response
 from app.core.i18n import negotiate_locale
 from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.permissions import AuthenticatedUser, Permission, require
@@ -41,6 +45,14 @@ from app.modules.media.schemas import MediaKind, PublicMediaOut
 from app.modules.media.service import MediaServiceDep
 
 public_router = APIRouter(prefix="/listings", tags=["listings:public"])
+
+
+def _query_hash(payload: dict[str, object], locale: str) -> str:
+    """A stable short digest of a query dict + locale, for a cache ident.
+    ``sort_keys`` makes it order-insensitive so two equivalent query strings
+    hit the same cache entry."""
+    blob = json.dumps({"q": payload, "locale": locale}, sort_keys=True, default=str)
+    return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 @public_router.get("")
@@ -81,21 +93,44 @@ async def list_published_listings(
 # Declared before /{ref_or_id} — route matching is in declaration order.
 @public_router.get("/map")
 async def map_published_listings(
+    request: Request,
     tenant: TenantDep,
     service: ListingServiceDep,
     query: Annotated[MapQuery, Query()],
     accept_language: str | None = Header(default=None),
 ) -> MapOut:
     resolved = negotiate_locale(query.locale, accept_language)
-    pins, clusters, clustered = await service.map_points(tenant, filters=query, locale=resolved)
-    return MapOut(
-        clustered=clustered,
-        pins=[
-            MapPinOut(id=r.id, lat=r.lat, lng=r.lng, price=r.price, status=r.status) for r in pins
-        ],
-        clusters=[
-            MapClusterOut(lat=float(r.lat), lng=float(r.lng), count=r.count) for r in clusters
-        ],
+    settings = request.app.state.settings
+
+    async def _load() -> MapOut:
+        pins, clusters, clustered = await service.map_points(tenant, filters=query, locale=resolved)
+        return MapOut(
+            clustered=clustered,
+            pins=[
+                MapPinOut(id=r.id, lat=r.lat, lng=r.lng, price=r.price, status=r.status)
+                for r in pins
+            ],
+            clusters=[
+                MapClusterOut(lat=float(r.lat), lng=float(r.lng), count=r.count) for r in clusters
+            ],
+        )
+
+    # Keyed on a hash of the (viewport + filters) query and negotiated locale.
+    # TTL-only invalidation (60s, §11): map clusters are aggregate geo data
+    # where a short staleness window is acceptable, so no write-time version
+    # bump is wired (unlike content pages) — the tight TTL *is* the freshness
+    # guarantee.
+    viewport = _query_hash(query.model_dump(mode="json", exclude_none=True), resolved)
+    return await cache_aside(
+        request.app.state.redis,
+        tenant_id=str(tenant.id),
+        entity="listing_map",
+        ident=viewport,
+        ttl_seconds=settings.cache_map_ttl_seconds,
+        loader=_load,
+        serialize=lambda v: v.model_dump(mode="json"),
+        deserialize=MapOut.model_validate,
+        enabled=settings.cache_enabled,
     )
 
 
@@ -118,23 +153,33 @@ def _jsonld_images(media: list[PublicMediaOut]) -> list[str]:
 @public_router.get("/{ref_or_id}")
 async def get_published_listing(
     ref_or_id: str,
+    request: Request,
     tenant: TenantDep,
     service: ListingServiceDep,
     media_service: MediaServiceDep,
     locale: str | None = Query(default=None),
     accept_language: str | None = Header(default=None),
-) -> PublicListingOut:
+) -> Response:
     resolved = negotiate_locale(locale, accept_language)
     listing = await service.get_public(tenant, ref_or_id)
     rows = await media_service.public_for_listing(tenant, listing.id)
     media = [PublicMediaOut.from_media(m, resolved, media_service.public_url) for m in rows]
     cover = next((m for m in media if m.kind is MediaKind.PHOTO), None)
-    return PublicListingOut.from_listing(
+    out = PublicListingOut.from_listing(
         listing,
         resolved,
         cover=cover,
         media=media,
         json_ld=build_json_ld(listing, resolved, images=_jsonld_images(media)),
+    )
+    # CDN/browser validator caching (§11): a strong ETag over the body plus the
+    # listing's own updated_at as Last-Modified; a matching conditional GET is a
+    # 304. `s-maxage` lets an edge absorb anonymous detail-page traffic.
+    return cached_json_response(
+        request,
+        out,
+        s_maxage=request.app.state.settings.public_cache_s_maxage_seconds,
+        last_modified=listing.updated_at,
     )
 
 

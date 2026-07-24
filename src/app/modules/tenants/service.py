@@ -18,6 +18,7 @@ from redis.asyncio import Redis
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core.cache import bump_version
 from app.core.config import get_settings
 from app.core.database import SessionDep
 from app.core.exceptions import ConflictError, NotFoundError
@@ -138,6 +139,16 @@ class TenantService:
 
         self.repo.after_commit(_invalidate)
 
+    def _invalidate_site_config_after_commit(self, tenant_id: uuid.UUID) -> None:
+        """Bump the ``site_config`` cache version (§11) so the cached
+        ``GET /site/config`` payload is retired after a settings/plan/status
+        change. Post-commit for the same reason as the domain cache above."""
+
+        async def _bump() -> None:
+            await bump_version(self.redis, str(tenant_id), "site_config")
+
+        self.repo.after_commit(_bump)
+
     async def _flush_or_conflict(self) -> None:
         """Uniqueness pre-checks race under concurrency; the DB constraint is
         the real guard — surface its violation as 409, not 500."""
@@ -215,6 +226,7 @@ class TenantService:
             tenant.settings = patch["settings"]
         await self.repo.flush()
         self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
+        self._invalidate_site_config_after_commit(tenant_id)
         return await self._get_or_404(tenant_id)
 
     async def get_settings_key(self, tenant_id: uuid.UUID, key: str) -> dict[str, object]:
@@ -238,6 +250,7 @@ class TenantService:
         tenant.settings = {**tenant.settings, key: value}
         await self.repo.flush()
         self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
+        self._invalidate_site_config_after_commit(tenant_id)
         return value
 
     async def set_status(self, tenant_id: uuid.UUID, status: TenantStatus) -> Tenant:
@@ -260,6 +273,7 @@ class TenantService:
         # The plan rides on the cached TenantContext — invalidate so a
         # quota check on the next request reads the new tier.
         self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
+        self._invalidate_site_config_after_commit(tenant_id)
         return await self._get_or_404(tenant_id)
 
     async def start_offboard(self, tenant_id: uuid.UUID) -> Tenant:

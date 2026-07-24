@@ -9,8 +9,10 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
 
+from app.core.cache import cache_aside
+from app.core.http_cache import cached_json_response
 from app.core.i18n import negotiate_locale
 from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.permissions import AuthenticatedUser, Permission, require
@@ -58,14 +60,33 @@ class PublicGuideDetailOut(OutSchema):
 @public_router.get("/pages/{slug}")
 async def get_public_page(
     slug: str,
+    request: Request,
     tenant: TenantDep,
     service: ContentServiceDep,
     locale: str | None = Query(default=None),
     accept_language: str | None = Header(default=None),
-) -> PublicPageOut:
+) -> Response:
     resolved = negotiate_locale(locale, accept_language)
-    page = await service.get_public_page(tenant, slug)
-    return PublicPageOut.from_page(page, resolved)
+    settings = request.app.state.settings
+
+    async def _load() -> PublicPageOut:
+        page = await service.get_public_page(tenant, slug)
+        return PublicPageOut.from_page(page, resolved)
+
+    out = await cache_aside(
+        request.app.state.redis,
+        tenant_id=str(tenant.id),
+        entity="content_page",
+        ident=f"{slug}:{resolved}",
+        ttl_seconds=settings.cache_content_ttl_seconds,
+        loader=_load,
+        serialize=lambda v: v.model_dump(mode="json"),
+        deserialize=PublicPageOut.model_validate,
+        enabled=settings.cache_enabled,
+    )
+    # Redis absorbs origin load; ETag + Cache-Control let the CDN/browser
+    # absorb the rest (§11).
+    return cached_json_response(request, out, s_maxage=settings.public_cache_s_maxage_seconds)
 
 
 @public_router.get("/pages/{slug}/preview")
@@ -83,22 +104,56 @@ async def preview_page(
 
 
 @public_router.get("/legal")
-async def list_legal(tenant: TenantDep, service: ContentServiceDep) -> list[LegalIndexEntry]:
-    rows = await service.list_current_legal(tenant)
-    return [LegalIndexEntry.model_validate(r) for r in rows]
+async def list_legal(
+    request: Request, tenant: TenantDep, service: ContentServiceDep
+) -> list[LegalIndexEntry]:
+    settings = request.app.state.settings
+
+    async def _load() -> list[LegalIndexEntry]:
+        rows = await service.list_current_legal(tenant)
+        return [LegalIndexEntry.model_validate(r) for r in rows]
+
+    return await cache_aside(
+        request.app.state.redis,
+        tenant_id=str(tenant.id),
+        entity="legal",
+        ident="index",
+        ttl_seconds=settings.cache_content_ttl_seconds,
+        loader=_load,
+        serialize=lambda v: [e.model_dump(mode="json") for e in v],
+        deserialize=lambda raw: [LegalIndexEntry.model_validate(e) for e in raw],
+        enabled=settings.cache_enabled,
+    )
 
 
 @public_router.get("/legal/{kind}")
 async def get_legal(
     kind: LegalKind,
+    request: Request,
     tenant: TenantDep,
     service: ContentServiceDep,
     locale: str | None = Query(default=None),
     accept_language: str | None = Header(default=None),
-) -> PublicLegalPageOut:
+) -> Response:
     resolved = negotiate_locale(locale, accept_language)
-    page = await service.get_current_legal(tenant, kind)
-    return PublicLegalPageOut.from_page(page, resolved)
+    settings = request.app.state.settings
+
+    async def _load() -> PublicLegalPageOut:
+        page = await service.get_current_legal(tenant, kind)
+        return PublicLegalPageOut.from_page(page, resolved)
+
+    out = await cache_aside(
+        request.app.state.redis,
+        tenant_id=str(tenant.id),
+        entity="legal",
+        ident=f"{kind.value}:{resolved}",
+        ttl_seconds=settings.cache_content_ttl_seconds,
+        loader=_load,
+        serialize=lambda v: v.model_dump(mode="json"),
+        deserialize=PublicLegalPageOut.model_validate,
+        enabled=settings.cache_enabled,
+    )
+    return cached_json_response(request, out, s_maxage=settings.public_cache_s_maxage_seconds)
 
 
 # ---- neighborhood guides (public) ----

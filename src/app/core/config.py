@@ -150,6 +150,19 @@ class Settings(BaseSettings):
     # re-executing it. 24h covers a client retrying well after a timeout.
     idempotency_key_ttl_seconds: int = 86_400
 
+    # Caching & performance (§11). ``cache_enabled`` gates the Redis
+    # cache-aside layer (degrades open when off or on any Redis error). The
+    # per-entity TTLs match the blueprint's staleness budgets; the CDN
+    # ``s-maxage`` lets an edge absorb anonymous public-GET traffic while the
+    # app stays the origin of truth (a version bump on write is what keeps the
+    # Redis layer correct; the CDN window is bounded and deliberately short).
+    cache_enabled: bool = True
+    cache_site_config_ttl_seconds: int = 300  # 5 min
+    cache_content_ttl_seconds: int = 300  # 5 min (pages, legal, nav)
+    cache_facets_ttl_seconds: int = 60
+    cache_map_ttl_seconds: int = 60
+    public_cache_s_maxage_seconds: int = 60  # Cache-Control on public GETs
+
     # Account lockout / backoff (§7.1). Failed logins are counted per account
     # *and* per source IP; past the threshold the account is locked for a
     # window that doubles per further failure, up to a cap. Unlike the rate
