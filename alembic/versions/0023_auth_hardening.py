@@ -14,6 +14,10 @@ Part 29 (§7.1, §10.3).
 - ``users.mfa_enabled`` / ``mfa_enrolled_at`` split "a secret exists" (mid
   enrolment, not yet proven) from "the second factor is live". Only an enabled
   factor is ever demanded at login.
+- ``users.mfa_pending_secret`` holds an in-progress (re-)enrolment's seed,
+  promoted to ``mfa_secret`` only when a code proves the person holds it. This
+  keeps a re-enrolment from ever overwriting the *live* secret before the new
+  factor is confirmed — abandoning a re-enrolment must not break login.
 - ``sessions.last_used_at`` powers the session-list endpoint (§10.3): "log out
   other devices" is only usable if a person can tell which row is which.
 - ``oauth_identities`` links an external provider subject to a local account.
@@ -43,6 +47,7 @@ def upgrade() -> None:
         type_=sa.String(length=255),
         existing_nullable=True,
     )
+    op.add_column("users", sa.Column("mfa_pending_secret", sa.String(length=255), nullable=True))
     op.add_column(
         "users",
         sa.Column("mfa_enabled", sa.Boolean(), server_default=sa.text("false"), nullable=False),
@@ -107,6 +112,7 @@ def downgrade() -> None:
     op.drop_column("sessions", "last_used_at")
     op.drop_column("users", "mfa_enrolled_at")
     op.drop_column("users", "mfa_enabled")
+    op.drop_column("users", "mfa_pending_secret")
     op.alter_column(
         "users",
         "mfa_secret",

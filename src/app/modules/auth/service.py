@@ -296,7 +296,15 @@ class AuthService:
         if identity is None:
             raise UnauthorizedError("The refresh token is invalid.")
 
-        session.revoked_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        # Stamp the presented row as just-used before it is rotated away: this
+        # is what gives a device a real "last active" time. The new row this
+        # refresh mints starts at `created_at == last_used_at == now`, so the
+        # value on whichever row is currently live always reflects the most
+        # recent authentication on that device, not merely when it first
+        # signed in.
+        session.last_used_at = now
+        session.revoked_at = now
         return await self._issue(identity, client, family_id=session.family_id)
 
     async def _revoke_family_committed(
@@ -576,6 +584,12 @@ class AuthService:
             raise ConflictError(
                 "An account already exists for this email. Sign in with your password instead."
             )
+        # `get_identity_by_email` only returns *active* accounts. If the address
+        # is taken by an inactive (suspended/disabled) one, fall-through would
+        # try to insert a duplicate and surface an opaque unique-violation 409;
+        # give the real reason instead.
+        if existing is None and await self.users.email_taken(tenant_id, profile.email):
+            raise ConflictError("This account is not active. Contact your agency administrator.")
 
         identity = existing or await self.users.register_account(
             tenant_id,

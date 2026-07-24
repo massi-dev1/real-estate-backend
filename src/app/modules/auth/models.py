@@ -29,9 +29,10 @@ class AuthSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     ip: Mapped[str | None] = mapped_column(String(45))
     expires_at: Mapped[datetime]
     revoked_at: Mapped[datetime | None]
-    # Stamped on every rotation, so the session list (§10.3) can show which
-    # device was active when — "log out other devices" is only usable if a
-    # person can tell the rows apart.
+    # Set to "now" when the row is issued and again on the presented row each
+    # time it is refreshed, so a device's last-active time is real (not just
+    # its first sign-in). The session list (§10.3) shows it so a person can
+    # tell devices apart — "log out other devices" is only usable then.
     last_used_at: Mapped[datetime | None]
 
 

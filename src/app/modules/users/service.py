@@ -333,6 +333,13 @@ class UserService:
             return None
         return _to_identity(user)
 
+    async def email_taken(self, tenant_id: uuid.UUID | None, email: str) -> bool:
+        """Whether a non-deleted account exists for this email, regardless of
+        status. ``get_identity_by_email`` only returns *active* rows, so a
+        caller that must not blindly insert a new account (OAuth linking) needs
+        this to tell "no account" from "an inactive account already owns it"."""
+        return await self.repo.get_by_email(tenant_id, email) is not None
+
     async def set_password(
         self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, new_password: str
     ) -> UserIdentity | None:
@@ -356,27 +363,33 @@ class UserService:
         goes only to the already-authenticated owner who is about to store it
         in their own authenticator app — the whole point of enrolment.
 
-        The secret is stored but ``mfa_enabled`` stays false: an enrolment that
-        is started and abandoned must never demand a factor the person cannot
+        The secret is written to ``mfa_pending_secret``, not the live
+        ``mfa_secret``, and ``mfa_enabled`` is untouched: an enrolment that is
+        started and abandoned must never demand a factor the person cannot
         produce. Re-enrolling while already enabled is allowed (a lost phone) —
-        but it does **not** disable the live factor until the new one verifies,
-        so a hijacked session cannot silently swap the second factor out.
+        and because the pending secret is a *separate* column, the live factor
+        keeps working until the new one is confirmed, so neither an abandoned
+        re-enrolment nor a hijacked session can silently break or swap the
+        second factor.
         """
         user = await self._get_or_404(tenant_id, user_id)
         secret = generate_totp_secret()
-        user.mfa_secret = secret
+        user.mfa_pending_secret = secret
         await self.repo.flush()
         return provisioning_uri(secret, account_name=user.email, issuer=issuer), secret
 
     async def confirm_mfa_enrolment(
         self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, code: str, settings: Settings
     ) -> bool:
-        """Activate the pending factor if ``code`` proves the person holds it."""
+        """Promote the pending factor to live if ``code`` proves the person
+        holds it. Only here does ``mfa_pending_secret`` become ``mfa_secret``."""
         user = await self._get_or_404(tenant_id, user_id)
-        if not user.mfa_secret:
+        if not user.mfa_pending_secret:
             raise ConflictError("Start MFA enrolment before confirming it.")
-        if not verify_totp(user.mfa_secret, code, settings):
+        if not verify_totp(user.mfa_pending_secret, code, settings):
             return False
+        user.mfa_secret = user.mfa_pending_secret
+        user.mfa_pending_secret = None
         user.mfa_enabled = True
         user.mfa_enrolled_at = datetime.now(UTC)
         await self.repo.flush()
@@ -401,6 +414,7 @@ class UserService:
         user.mfa_enabled = False
         user.mfa_enrolled_at = None
         user.mfa_secret = None
+        user.mfa_pending_secret = None
         await self.repo.flush()
 
     async def check_password(

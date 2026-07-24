@@ -61,7 +61,13 @@ class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # TOTP secret (§7.1). Encrypted at rest via Part 30's AES-GCM field cipher
     # (§10.7) — a DB dump must not hand over working second factors. Reversible
     # on purpose (unlike password_hash): TOTP verification needs the seed back.
+    # This is the *live* secret — the one login-time verification reads.
     mfa_secret: Mapped[str | None] = mapped_column(EncryptedString(255))
+    # An in-progress (re-)enrolment's seed, promoted to `mfa_secret` only once a
+    # code proves the person holds it. Kept separate so re-enrolling (a lost
+    # phone) never overwrites the live secret before the new factor is
+    # confirmed — an abandoned re-enrolment leaves login working on the old one.
+    mfa_pending_secret: Mapped[str | None] = mapped_column(EncryptedString(255))
     # A secret alone is not a live factor: enrolment mints one, but only a
     # successful verify flips `mfa_enabled`, so an abandoned enrolment can
     # never lock someone out of their own account.

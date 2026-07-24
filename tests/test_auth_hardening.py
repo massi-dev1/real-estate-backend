@@ -125,11 +125,12 @@ async def test_account_lockout_is_scoped_per_tenant(app: FastAPI) -> None:
 
 async def test_ip_lockout_stops_spraying_many_accounts(app: FastAPI) -> None:
     """The second key: one source failing against *different* accounts, each
-    of which alone stays under its own threshold, is still stopped."""
+    of which alone stays under its own threshold, is still stopped once it
+    crosses the (much larger) per-IP budget."""
     lockout = LoginLockout(app.state.redis, get_settings())
     ip = "10.0.0.9"
 
-    for n in range(get_settings().login_max_failed_attempts):
+    for n in range(get_settings().login_ip_max_failed_attempts):
         await lockout.record_failure("tenant-a", f"victim-{n}@example.com", ip)
 
     # No single account crossed its threshold...
@@ -138,15 +139,32 @@ async def test_ip_lockout_stops_spraying_many_accounts(app: FastAPI) -> None:
     assert await lockout.is_locked("tenant-a", "fresh@example.com", ip) is True
 
 
+async def test_ip_budget_is_larger_than_the_account_budget(app: FastAPI) -> None:
+    """A shared egress (corporate NAT, mobile CGNAT) must not be locked out by
+    one client failing at the per-account rate: the IP key needs a far bigger
+    budget, so an account-threshold burst from one IP leaves it unlocked."""
+    settings = get_settings()
+    assert settings.login_ip_max_failed_attempts > settings.login_max_failed_attempts
+    lockout = LoginLockout(app.state.redis, settings)
+    ip = "10.0.0.77"
+
+    # One client fails exactly the per-account budget against distinct accounts
+    # (so no single account locks) — the IP must still be open.
+    for n in range(settings.login_max_failed_attempts):
+        await lockout.record_failure("tenant-a", f"shared-{n}@example.com", ip)
+    assert await lockout.is_locked("tenant-a", "legit@example.com", ip) is False
+
+
 def test_backoff_doubles_and_is_capped() -> None:
     settings = get_settings()
     base, threshold = settings.login_lockout_base_seconds, settings.login_max_failed_attempts
 
-    assert _backoff_seconds(threshold, settings) == base
-    assert _backoff_seconds(threshold + 1, settings) == base * 2
-    assert _backoff_seconds(threshold + 2, settings) == base * 4
+    assert _backoff_seconds(threshold, threshold, settings) == base
+    assert _backoff_seconds(threshold + 1, threshold, settings) == base * 2
+    assert _backoff_seconds(threshold + 2, threshold, settings) == base * 4
     # A determined attacker must not be able to lock a real user out for days.
-    assert _backoff_seconds(threshold + 50, settings) == settings.login_lockout_max_seconds
+    capped = _backoff_seconds(threshold + 50, threshold, settings)
+    assert capped == settings.login_lockout_max_seconds
 
 
 async def test_lockout_degrades_open_when_redis_is_down(
@@ -402,6 +420,36 @@ async def test_mfa_secret_is_encrypted_at_rest(
             "mfaToken": (await login_user(client, HOST_A, EMAIL, PASSWORD)).json()["mfaToken"],
             "code": pyotp.TOTP(secret).now(),
         },
+        headers={"Host": HOST_A},
+    )
+    assert verified.status_code == 200, verified.text
+
+
+async def test_abandoned_re_enrolment_keeps_the_live_factor(
+    client: AsyncClient, platform_headers: dict[str, str], app: FastAPI
+) -> None:
+    """Re-enrolling (a lost phone) mints a *pending* secret; abandoning it
+    before confirming must leave the original factor working — the enrolment
+    must never overwrite the live secret before the new one is proven."""
+    await make_tenant(client, platform_headers)
+    registered = await register_user(client, HOST_A, email=EMAIL, password=PASSWORD)
+    access = bearer(registered)
+    original_secret = await _enrol_mfa(client, access, app)
+
+    # Start a re-enrolment (new secret handed out) but never confirm it.
+    re_enrol = await client.post(
+        "/api/v1/auth/mfa/enrol", headers={"Host": HOST_A, "Authorization": access}
+    )
+    assert re_enrol.status_code == 201
+    new_secret = re_enrol.json()["secret"]
+    assert new_secret != original_secret
+
+    # A login-time code from the *original* authenticator still verifies: the
+    # live factor was untouched by the abandoned re-enrolment.
+    challenge = await login_user(client, HOST_A, EMAIL, PASSWORD)
+    verified = await client.post(
+        "/api/v1/auth/mfa/verify",
+        json={"mfaToken": challenge.json()["mfaToken"], "code": pyotp.TOTP(original_secret).now()},
         headers={"Host": HOST_A},
     )
     assert verified.status_code == 200, verified.text

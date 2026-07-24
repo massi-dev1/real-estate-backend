@@ -160,6 +160,13 @@ class Settings(BaseSettings):
     login_lockout_max_seconds: int = 3600
     # The window a failed-attempt counter survives without a further failure.
     login_failure_window_seconds: int = 900
+    # The per-IP threshold is deliberately much higher than the per-account one:
+    # many legitimate users can share one public IP (corporate NAT, mobile
+    # CGNAT), so a threshold at the per-account level would let one bad client
+    # lock every user behind that egress out. This key exists to blunt one host
+    # spraying *many* accounts, which needs a far larger failure budget than a
+    # focused attack on a single account.
+    login_ip_max_failed_attempts: int = 50
 
     # Breached-password check (§10.3): Have I Been Pwned's k-anonymity range
     # API — only the first 5 hex chars of the password's SHA-1 ever leave the

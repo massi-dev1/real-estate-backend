@@ -15,6 +15,14 @@ Two independent counters per attempt:
 * ``auth:lockout:ip:{ip}`` — the source, so one host cannot spray many
   accounts, each of which alone stays under its own threshold.
 
+The two keys have **different thresholds**. The account key trips at
+``login_max_failed_attempts`` (a focused attack on one account). The IP key
+trips at the much larger ``login_ip_max_failed_attempts``, because many
+legitimate users can share one public IP (corporate NAT, mobile CGNAT) — an
+IP threshold at the per-account level would let one misbehaving client behind
+a shared egress lock every real user out. The IP key is the anti-spray
+backstop, not the primary lock, so it is deliberately hard to trip by accident.
+
 Either being locked refuses the attempt. Backoff doubles per failure past the
 threshold (``base * 2 ** (failures - threshold)``, capped), so a wrong password
 typed twice costs nothing while a script is quickly pushed into hour-long
@@ -55,14 +63,14 @@ def _account_key(tenant_id: str, email: str) -> str:
     return _USER_KEY.format(tenant_id, digest)
 
 
-def _backoff_seconds(failures: int, settings: Settings) -> int:
-    """Doubling backoff past the threshold, capped.
+def _backoff_seconds(failures: int, threshold: int, settings: Settings) -> int:
+    """Doubling backoff past ``threshold``, capped.
 
     ``failures`` at exactly the threshold gives the base delay; each further
     failure doubles it. The cap keeps a long-running attack from locking a real
     user out for days over an attacker's persistence.
     """
-    over = max(0, failures - settings.login_max_failed_attempts)
+    over = max(0, failures - threshold)
     delay: int = settings.login_lockout_base_seconds * (2**over)
     return min(delay, settings.login_lockout_max_seconds)
 
@@ -89,21 +97,11 @@ class LoginLockout:
             return False
         return any(value is not None for value in locks)
 
-    async def retry_after(self, tenant_id: str, email: str, ip: str) -> int:
-        """Seconds until the *longer* of the two locks expires (best effort)."""
-        account_key, ip_key = self._keys(tenant_id, email, ip)
-        try:
-            pipe = self.redis.pipeline()
-            pipe.ttl(account_key + _LOCK_SUFFIX)
-            pipe.ttl(ip_key + _LOCK_SUFFIX)
-            ttls = await pipe.execute()
-        except Exception:
-            return self.settings.login_lockout_base_seconds
-        return max([int(t) for t in ttls if isinstance(t, int) and t > 0], default=1)
-
     async def record_failure(self, tenant_id: str, email: str, ip: str) -> None:
         """Count a failed attempt against both keys, locking whichever crosses
-        the threshold. Fail-soft: a Redis error only loses this one count."""
+        its own threshold (the account key is focused-attack sensitive; the IP
+        key needs a far larger budget so a shared egress is not locked out by
+        one bad client). Fail-soft: a Redis error only loses this one count."""
         account_key, ip_key = self._keys(tenant_id, email, ip)
         try:
             pipe = self.redis.pipeline()
@@ -116,11 +114,14 @@ class LoginLockout:
             return
 
         # incr/expire alternate, so the counts are at even indices.
-        counts = {account_key: int(results[0]), ip_key: int(results[2])}
-        for key, failures in counts.items():
-            if failures < self.settings.login_max_failed_attempts:
+        thresholds = {
+            account_key: (int(results[0]), self.settings.login_max_failed_attempts),
+            ip_key: (int(results[2]), self.settings.login_ip_max_failed_attempts),
+        }
+        for key, (failures, threshold) in thresholds.items():
+            if failures < threshold:
                 continue
-            delay = _backoff_seconds(failures, self.settings)
+            delay = _backoff_seconds(failures, threshold, self.settings)
             try:
                 await self.redis.set(key + _LOCK_SUFFIX, str(int(time.time())), ex=delay)
             except Exception:

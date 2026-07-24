@@ -15,6 +15,8 @@ buys nothing here and would pull in JWKS fetching, caching and rotation.
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import httpx
 import structlog
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -48,14 +50,19 @@ class GoogleOAuthProvider:
         return PROVIDER_KEY
 
     def authorization_url(self, *, redirect_uri: str, state: str) -> str:
-        client = AsyncOAuth2Client(
-            client_id=self._client_id,
-            client_secret=self._client_secret,
-            scope=_SCOPE,
-            redirect_uri=redirect_uri,
+        # Built directly rather than via an OAuth client: this is pure string
+        # assembly (no network call), and instantiating AsyncOAuth2Client here
+        # would leak an unclosed httpx client / connection pool per call.
+        params = urlencode(
+            {
+                "client_id": self._client_id,
+                "redirect_uri": redirect_uri,
+                "response_type": "code",
+                "scope": _SCOPE,
+                "state": state,
+            }
         )
-        url, _ = client.create_authorization_url(_AUTHORIZE_URL, state=state)
-        return str(url)
+        return f"{_AUTHORIZE_URL}?{params}"
 
     async def exchange_code(self, *, code: str, redirect_uri: str) -> OAuthProfile:
         try:

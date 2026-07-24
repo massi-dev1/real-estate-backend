@@ -78,15 +78,16 @@ class BreachChecker:
         return False
 
 
-_checker: BreachChecker | None = None
-
-
 def build_breach_checker(settings: Settings) -> BreachChecker:
-    """Process-wide checker (it holds only config, no connection state)."""
-    global _checker
-    if _checker is None:
-        _checker = BreachChecker(settings)
-    return _checker
+    """Build a checker for the given settings.
+
+    Constructed fresh per caller rather than cached in a module global: the
+    checker holds only config (no connection state — each ``is_breached`` call
+    opens and closes its own short-lived httpx client), and a process-wide
+    singleton would silently ignore a later caller built with different
+    ``hibp_*`` settings and leak that config across a test process.
+    """
+    return BreachChecker(settings)
 
 
 __all__ = ["BreachChecker", "build_breach_checker"]
