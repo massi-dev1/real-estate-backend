@@ -24,6 +24,8 @@ normally (§9 is a convenience against accidental duplicates, not a
 correctness guarantee that must hold when the cache itself is unavailable).
 """
 
+import asyncio
+import hashlib
 import json
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -38,6 +40,7 @@ from app.core.exceptions import IdempotencyConflictError
 logger = structlog.get_logger(__name__)
 
 _LOCK_SECONDS = 30  # generous upper bound on how long one of these POSTs can take
+_IN_PROGRESS = "__in_progress__"
 
 
 def _cache_key(*, tenant_id: str, actor_id: str, key: str, route: str) -> str:
@@ -45,18 +48,52 @@ def _cache_key(*, tenant_id: str, actor_id: str, key: str, route: str) -> str:
 
 
 def _actor_id(request: Request) -> str:
-    """The header-carried bearer identity, or ``"anon"`` for the public
-    capture surfaces (lead capture, tour booking) this facility also guards —
-    those have no ``AuthenticatedUser`` at all."""
+    """A stable identity for the caller, or ``"anon"`` for the public capture
+    surfaces (lead capture, tour booking) this facility also guards — those
+    have no ``AuthenticatedUser`` at all.
+
+    Hashed rather than stored raw: the header carries a live bearer token,
+    and embedding it verbatim in a Redis key name would put it in reach of
+    ``MONITOR``/``SLOWLOG``/``KEYS``/an RDB dump — the same class of exposure
+    ``auth_sessions`` already hashes refresh tokens at rest to avoid.
+    """
     header = request.headers.get("authorization", "")
-    if header:
-        return header  # opaque; never decoded here, just used as a cache-key component
-    return "anon"
+    if not header:
+        return "anon"
+    return hashlib.sha256(header.encode()).hexdigest()
 
 
 def _tenant_id(request: Request) -> str:
     tenant = getattr(request.state, "tenant", None)
     return str(tenant.id) if tenant is not None else "platform"
+
+
+# Recomputed fresh by Response.init_headers from the replayed body/media_type
+# — replaying the stored values would either duplicate them or, for
+# content-length, mismatch if body encoding ever differs by a byte.
+_REGENERATED_HEADERS = {"content-length", "content-type"}
+
+
+def _replay_headers(stored: dict[str, str] | None) -> dict[str, str] | None:
+    if not stored:
+        return None
+    return {k: v for k, v in stored.items() if k.lower() not in _REGENERATED_HEADERS}
+
+
+async def _renew_lock(redis: Redis, cache_key: str, route: str) -> None:
+    """Refresh the in-progress lock's TTL every half-window so a handler
+    that legitimately runs longer than ``_LOCK_SECONDS`` doesn't lose its
+    claim mid-flight. Cancelled by the caller as soon as the handler returns
+    — best-effort, like every other Redis touch point here: a failed renewal
+    just means the lock may expire early, not that the request fails."""
+    try:
+        while True:
+            await asyncio.sleep(_LOCK_SECONDS / 2)
+            await redis.expire(cache_key, _LOCK_SECONDS)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.warning("idempotency_lock_renew_failed", route=route)
 
 
 class IdempotentRoute(APIRoute):
@@ -85,43 +122,61 @@ class IdempotentRoute(APIRoute):
                 route=self.path,
             )
 
+            # A single SET NX both disambiguates "no prior attempt" from
+            # "one already exists" and claims the lock in one Redis round
+            # trip — a separate GET first would be a second RTT paid on
+            # every request just to learn what SET NX's return value
+            # already tells us.
             try:
-                cached = await redis.get(cache_key)
-            except Exception:
-                logger.warning("idempotency_check_failed", route=self.path)
-                return await original(request)
-
-            if cached is not None:
-                if cached == "__in_progress__":
-                    raise IdempotencyConflictError(
-                        "A request with this Idempotency-Key is already being processed."
-                    )
-                stored = json.loads(cached)
-                return Response(
-                    content=stored["body"],
-                    status_code=stored["status_code"],
-                    media_type=stored["media_type"],
-                )
-
-            try:
-                acquired = await redis.set(cache_key, "__in_progress__", nx=True, ex=_LOCK_SECONDS)
+                acquired = await redis.set(cache_key, _IN_PROGRESS, nx=True, ex=_LOCK_SECONDS)
             except Exception:
                 logger.warning("idempotency_lock_failed", route=self.path)
                 return await original(request)
 
             if not acquired:
-                raise IdempotencyConflictError(
-                    "A request with this Idempotency-Key is already being processed."
-                )
+                try:
+                    cached = await redis.get(cache_key)
+                except Exception:
+                    logger.warning("idempotency_check_failed", route=self.path)
+                    return await original(request)
 
+                if cached is None or cached == _IN_PROGRESS:
+                    raise IdempotencyConflictError(
+                        "A request with this Idempotency-Key is already being processed."
+                    )
+                try:
+                    stored = json.loads(cached)
+                    return Response(
+                        content=stored["body"],
+                        status_code=stored["status_code"],
+                        media_type=stored["media_type"],
+                        headers=_replay_headers(stored.get("headers")),
+                    )
+                except Exception:
+                    # A cached blob from an incompatible prior format (e.g. a
+                    # deploy that changed the stored shape) must degrade like
+                    # every other failure here, not 500 the caller.
+                    logger.warning("idempotency_decode_failed", route=self.path)
+                    return await original(request)
+
+            # The lock's TTL bounds how long a handler may run before a
+            # concurrent retry is let through as a fresh attempt (rather than
+            # waiting forever on a request that may have died). Renewing it
+            # partway through means a handler slower than one _LOCK_SECONDS
+            # window — but still alive — keeps its claim instead of losing
+            # the lock mid-flight and racing its own retry.
+            renew_task = asyncio.ensure_future(_renew_lock(redis, cache_key, self.path))
             try:
                 response = await original(request)
             except Exception:
+                renew_task.cancel()
                 try:
                     await redis.delete(cache_key)
                 except Exception:
                     logger.warning("idempotency_unlock_failed", route=self.path)
                 raise
+            else:
+                renew_task.cancel()
 
             if response.status_code < 500:
                 try:
@@ -132,6 +187,7 @@ class IdempotentRoute(APIRoute):
                                 "status_code": response.status_code,
                                 "media_type": response.media_type,
                                 "body": bytes(response.body).decode(),
+                                "headers": dict(response.headers),
                             }
                         ),
                         ex=settings.idempotency_key_ttl_seconds,

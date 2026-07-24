@@ -48,19 +48,22 @@ from app.modules.tenants.schemas import (
 from app.modules.tenants.service import TenantServiceDep
 
 # Reads need PLATFORM_TENANT_VIEW (router-wide); mutations add PLATFORM_TENANT_MANAGE.
+_view = [Depends(require(Permission.PLATFORM_TENANT_VIEW))]
 platform_router = APIRouter(
     prefix="/platform/tenants",
     tags=["platform:tenants"],
-    dependencies=[Depends(require(Permission.PLATFORM_TENANT_VIEW))],
+    dependencies=_view,
 )
 _manage = Depends(require(Permission.PLATFORM_TENANT_MANAGE))
-# Same prefix/RBAC as platform_router, split off only so the checkout POST
-# gets Idempotency-Key handling (§9) — a retried checkout call must not open
-# a second billing-provider session for the same tenant.
+# Same prefix/RBAC as platform_router — shares the *same* `_view` list object
+# rather than a second `Depends(require(...))` literal, so tightening the
+# gate on one can't silently drift from the other — split off only so the
+# checkout POST gets Idempotency-Key handling (§9): a retried checkout call
+# must not open a second billing-provider session for the same tenant.
 platform_billing_idempotent_router = APIRouter(
     prefix="/platform/tenants",
     tags=["platform:tenants"],
-    dependencies=[Depends(require(Permission.PLATFORM_TENANT_VIEW))],
+    dependencies=_view,
     route_class=IdempotentRoute,
 )
 

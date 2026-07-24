@@ -213,6 +213,57 @@ async def test_concurrent_duplicate_idempotency_key_gets_409(
     assert len(listed.json()["items"]) == 1
 
 
+def test_idempotency_replay_headers_preserve_custom_and_strip_regenerated() -> None:
+    """A cached replay must carry the original response's non-regenerated
+    headers (e.g. a Location/Set-Cookie a future wired endpoint might set),
+    while content-length/content-type — recomputed fresh by Response.
+    init_headers from the replayed body/media_type — aren't duplicated."""
+    from app.core.idempotency import _replay_headers
+
+    stored = {
+        "content-length": "123",
+        "content-type": "application/json",
+        "x-custom-header": "keep-me",
+        "set-cookie": "session=abc",
+    }
+    replayed = _replay_headers(stored)
+    assert replayed is not None
+    assert "content-length" not in replayed
+    assert "content-type" not in replayed
+    assert replayed["x-custom-header"] == "keep-me"
+    assert replayed["set-cookie"] == "session=abc"
+    assert _replay_headers(None) is None
+    assert _replay_headers({}) is None
+
+
+async def test_idempotency_lock_renewed_for_slow_handler(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A handler slower than one lock window must not lose its claim mid-
+    flight — the renewal loop should have extended the TTL at least once
+    before the handler returns."""
+    from app.core import idempotency as idem_module
+
+    class _FakeRedis:
+        def __init__(self) -> None:
+            self.expire_calls = 0
+
+        async def expire(self, key: str, ttl: int) -> bool:
+            self.expire_calls += 1
+            return True
+
+    monkeypatch.setattr(idem_module, "_LOCK_SECONDS", 1)
+    redis = _FakeRedis()
+    task = asyncio.ensure_future(
+        idem_module._renew_lock(redis, "idempotency:test:key", "/test")  # type: ignore[arg-type]
+    )
+    await asyncio.sleep(1.2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert redis.expire_calls >= 1
+
+
 async def test_idempotency_key_scoped_per_tenant(
     client: AsyncClient,
     platform_headers: dict[str, str],
