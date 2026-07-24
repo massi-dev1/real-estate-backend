@@ -21,16 +21,21 @@ collectors come along for free.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
 import structlog
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from redis.asyncio import Redis
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from redis.asyncio import Redis
     from sqlalchemy.ext.asyncio import AsyncEngine
+
+# Bound every scrape-time probe: a reachable-but-slow dependency must cost one
+# scrape, never accumulate pending scrapes on the shared event loop.
+_PROBE_TIMEOUT_SECONDS = 2.0
 
 logger = structlog.get_logger(__name__)
 
@@ -120,6 +125,11 @@ def _route_template(scope: Scope) -> str:
     template = path
     for name, value in params.items():
         text = str(value)
+        # A `{x:path}` convertor's regex is `.*`, which matches the empty
+        # string; `rpartition("")` raises ValueError, and this runs in the
+        # middleware's `finally`, so it would turn a good response into a 500.
+        if not text:
+            continue
         head, sep, tail = template.rpartition(text)
         if sep:
             template = f"{head}{{{name}}}{tail}"
@@ -157,10 +167,39 @@ class MetricsMiddleware:
             REQUESTS.labels(method=method, route=route, status=str(status_code)).inc()
 
 
-async def collect_runtime_metrics(engine: AsyncEngine | None, redis: Redis | None) -> None:
+async def _collect_queue_depths(broker: Redis) -> None:
+    """Sample per-queue backlog from the **broker** client.
+
+    It must be the broker's client, not ``app.state.redis``: the cache and the
+    broker are different Redis databases by default (``redis_url`` is db 0,
+    ``celery_broker_url`` db 2), so sampling the cache client would LLEN keys
+    that only ever exist on the broker and report 0 for every queue — silent
+    exactly during the backlog the §14 alert exists to catch.
+    """
+    for queue in CELERY_QUEUES:
+        try:
+            # redis-py types llen as sync-or-awaitable on the shared command
+            # mixin; on the asyncio client it is always awaitable.
+            depth: int = await asyncio.wait_for(
+                broker.llen(queue),  # type: ignore[arg-type]
+                _PROBE_TIMEOUT_SECONDS,
+            )
+            CELERY_QUEUE_DEPTH.labels(queue=queue).set(depth)
+        except Exception:
+            # `continue`, not `break`: one unreadable queue must not blind the
+            # remaining ones (they would silently keep a stale value forever).
+            logger.warning("metrics_queue_depth_unavailable", queue=queue)
+            continue
+
+
+async def collect_runtime_metrics(
+    engine: AsyncEngine | None, redis: Redis | None, broker: Redis | None = None
+) -> None:
     """Refresh the sampled gauges. Best-effort throughout: a scrape must never
     fail (or hang the scraper) because a dependency is degraded — the gauge
-    simply keeps its previous value and the failure is logged."""
+    simply keeps its previous value and the failure is logged. Every probe is
+    timeout-bounded so a reachable-but-slow dependency cannot let concurrent
+    scrapes pile up on the event loop that also serves real traffic."""
     if engine is not None:
         try:
             pool: Any = engine.pool
@@ -170,27 +209,18 @@ async def collect_runtime_metrics(engine: AsyncEngine | None, redis: Redis | Non
         except Exception:  # pragma: no cover - defensive
             logger.warning("metrics_db_pool_unavailable")
 
-    if redis is None:
-        return
-
-    try:
-        info = await redis.info("stats")
-        hits = float(info.get("keyspace_hits", 0))
-        misses = float(info.get("keyspace_misses", 0))
-        total = hits + misses
-        CACHE_HIT_RATIO.set(hits / total if total else 0.0)
-    except Exception:
-        logger.warning("metrics_cache_stats_unavailable")
-
-    for queue in CELERY_QUEUES:
+    if redis is not None:
         try:
-            # redis-py types llen as sync-or-awaitable on the shared command
-            # mixin; on the asyncio client it is always awaitable.
-            depth: int = await redis.llen(queue)  # type: ignore[misc]
-            CELERY_QUEUE_DEPTH.labels(queue=queue).set(depth)
+            info = await asyncio.wait_for(redis.info("stats"), _PROBE_TIMEOUT_SECONDS)
+            hits = float(info.get("keyspace_hits", 0))
+            misses = float(info.get("keyspace_misses", 0))
+            total = hits + misses
+            CACHE_HIT_RATIO.set(hits / total if total else 0.0)
         except Exception:
-            logger.warning("metrics_queue_depth_unavailable", queue=queue)
-            break
+            logger.warning("metrics_cache_stats_unavailable")
+
+    if broker is not None:
+        await _collect_queue_depths(broker)
 
 
 def render_metrics() -> tuple[bytes, str]:

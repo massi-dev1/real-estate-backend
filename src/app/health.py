@@ -6,9 +6,10 @@
 Readiness also *reports* the Celery broker and object storage, but does **not**
 gate on them (§14): they are diagnostic, not admission criteria.
 
-* The **broker** is the same Redis instance the session/cache client uses in
-  this deployment, so a separate failure is only possible with a split broker
-  URL; it is reported for that case.
+* The **broker** is a distinct Redis database from the cache by default
+  (``celery_broker_url`` db 2 vs ``redis_url`` db 0) and may be a distinct
+  instance, so it can fail independently; it is reported, not gated, because a
+  broker outage stalls background work while the API keeps answering.
 * **Storage** is deliberately non-gating. Presigned upload/download URLs are
   computed locally and every object read/write happens in a Celery task, so an
   S3 outage degrades the media pipeline but leaves the entire API serving. Failing
@@ -26,8 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.core.storage import ObjectStorage
 
-# Bound the diagnostic probes so a hung dependency can never hold a readiness
-# request open past a load balancer's own timeout.
+# Bound *every* probe — gating and diagnostic alike — so a hung dependency can
+# never hold a readiness request open past a load balancer's own timeout.
 _PROBE_TIMEOUT_SECONDS = 2.0
 
 logger = structlog.get_logger(__name__)
@@ -40,10 +41,19 @@ async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+async def _ping_database(engine: AsyncEngine) -> None:
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
 async def _check_database(engine: AsyncEngine) -> bool:
     try:
-        async with engine.connect() as conn:
-            await conn.execute(text("SELECT 1"))
+        # Timed out like every other probe — and this one *gates* readiness, so
+        # it matters most: a Postgres that accepts the TCP connection and then
+        # stalls (pool exhaustion, saturated server, blackholed route) would
+        # otherwise hang /readyz forever, leaking a connection per probe
+        # interval and compounding the exhaustion that caused it.
+        await asyncio.wait_for(_ping_database(engine), _PROBE_TIMEOUT_SECONDS)
     except Exception:
         logger.warning("readyz_database_unreachable")
         return False
@@ -52,23 +62,25 @@ async def _check_database(engine: AsyncEngine) -> bool:
 
 async def _check_redis(redis: Redis) -> bool:
     try:
-        return bool(await redis.ping())
+        return bool(await asyncio.wait_for(redis.ping(), _PROBE_TIMEOUT_SECONDS))
     except Exception:
         logger.warning("readyz_redis_unreachable")
         return False
 
 
-async def _check_broker(settings_broker_url: str) -> bool:
-    """Ping the Celery broker. A separate client (not ``app.state.redis``)
-    because the broker URL may point at a different instance/DB index."""
-    client: Redis = Redis.from_url(settings_broker_url, decode_responses=True)
+async def _check_broker(broker: Redis) -> bool:
+    """Ping the Celery broker over the long-lived client built in the lifespan.
+
+    A distinct client from ``app.state.redis`` because the broker URL may point
+    at a different instance/DB index — but built once at startup, not per probe:
+    readiness is polled on a fixed interval, and a fresh pool per poll would
+    churn connections against the broker precisely when it is already degraded.
+    """
     try:
-        return bool(await asyncio.wait_for(client.ping(), _PROBE_TIMEOUT_SECONDS))
+        return bool(await asyncio.wait_for(broker.ping(), _PROBE_TIMEOUT_SECONDS))
     except Exception:
         logger.warning("readyz_broker_unreachable")
         return False
-    finally:
-        await client.aclose()
 
 
 async def _check_storage(storage: ObjectStorage) -> bool:
@@ -86,7 +98,7 @@ async def readyz(request: Request, response: Response) -> dict[str, str]:
     redis: Redis = request.app.state.redis
     db_ok = await _check_database(request.app.state.engine)
     redis_ok = await _check_redis(redis)
-    broker_ok = await _check_broker(request.app.state.settings.celery_broker_url)
+    broker_ok = await _check_broker(request.app.state.broker_redis)
     storage_ok = await _check_storage(request.app.state.storage)
 
     # Only Postgres and Redis gate readiness — the API cannot answer a single

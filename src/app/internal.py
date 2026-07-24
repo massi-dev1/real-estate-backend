@@ -59,7 +59,9 @@ async def metrics(request: Request) -> Response:
         return Response(status_code=status.HTTP_404_NOT_FOUND)
 
     await collect_runtime_metrics(
-        getattr(request.app.state, "engine", None), getattr(request.app.state, "redis", None)
+        getattr(request.app.state, "engine", None),
+        getattr(request.app.state, "redis", None),
+        getattr(request.app.state, "broker_redis", None),
     )
     payload, content_type = render_metrics()
     return Response(content=payload, media_type=content_type)

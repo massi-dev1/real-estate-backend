@@ -29,6 +29,15 @@ logger = structlog.get_logger(__name__)
 
 _otel_instrumented = False
 
+# Header names that must never leave the process. A superset of
+# ``REDACTED_KEYS``, which is a *log-field* denylist and so has no reason to
+# know about transport headers: a raw ``Cookie: refresh_token=<opaque>`` header
+# normalises to the key ``cookie``, matches nothing in that set, and would ship
+# a live session credential to Sentry on any authenticated 500 (§10.12).
+# Dropping the parsed ``cookies`` dict does not cover it — that is a different
+# field on the event.
+_REDACTED_HEADERS = frozenset({"cookie", "set_cookie", "proxy_authorization"}) | REDACTED_KEYS
+
 
 # ---- Sentry ----
 
@@ -46,7 +55,7 @@ def _scrub_event(event: Event, _hint: Hint) -> Event:
         headers = request.get("headers")
         if isinstance(headers, dict):
             for key in list(headers):
-                if key.lower().replace("-", "_") in REDACTED_KEYS:
+                if key.lower().replace("-", "_") in _REDACTED_HEADERS:
                     headers[key] = "[redacted]"
         request.pop("cookies", None)
         request.pop("data", None)
@@ -88,6 +97,18 @@ def init_sentry(settings: Settings, *, component: str) -> bool:
 # ---- OpenTelemetry ----
 
 
+def tracing_configured(settings: Settings) -> bool:
+    """Whether tracing is fully configured.
+
+    Both halves are required: ``otel_enabled`` without an endpoint would build
+    an exporter that only fails later, at export time. Every entry point checks
+    this same predicate, so instrumentation can never be applied against a
+    provider that ``init_tracing`` declined to install — which would pay
+    span-creation cost on the hottest paths for spans that are then discarded.
+    """
+    return bool(settings.otel_enabled and settings.otel_exporter_endpoint)
+
+
 def init_tracing(settings: Settings) -> bool:
     """Configure the OTLP tracer provider. Returns whether tracing is on.
 
@@ -95,7 +116,7 @@ def init_tracing(settings: Settings) -> bool:
     (:func:`instrument_app`/:func:`instrument_celery`) because the FastAPI app
     and the SQLAlchemy engine only exist later in startup.
     """
-    if not settings.otel_enabled or not settings.otel_exporter_endpoint:
+    if not tracing_configured(settings):
         return False
 
     from opentelemetry import trace
@@ -133,7 +154,7 @@ def instrument_app(app: FastAPI, engine: AsyncEngine | None, settings: Settings)
     """Instrument FastAPI + SQLAlchemy once tracing is configured and the
     engine exists (called from the lifespan, not the app factory)."""
     global _otel_instrumented
-    if not settings.otel_enabled or _otel_instrumented:
+    if not tracing_configured(settings) or _otel_instrumented:
         return
 
     try:
@@ -156,7 +177,7 @@ def instrument_app(app: FastAPI, engine: AsyncEngine | None, settings: Settings)
 
 def instrument_celery(settings: Settings) -> None:
     """Instrument Celery in the worker process (called from ``worker_process_init``)."""
-    if not settings.otel_enabled:
+    if not tracing_configured(settings):
         return
     try:
         from opentelemetry.instrumentation.celery import CeleryInstrumentor

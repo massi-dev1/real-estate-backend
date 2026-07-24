@@ -66,6 +66,12 @@ logger = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    # A separate long-lived client for the Celery broker: it is a different
+    # Redis database (and may be a different instance) than the cache, and both
+    # the readiness probe and the queue-depth gauge poll it on a fixed interval
+    # — building a pool per probe would churn short-lived connections against
+    # the broker exactly when it is already struggling.
+    app.state.broker_redis = Redis.from_url(settings.celery_broker_url, decode_responses=True)
     app.state.engine = create_engine(settings)
     app.state.session_factory = create_session_factory(app.state.engine)
     app.state.storage = create_storage(settings)
@@ -81,6 +87,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     await app.state.engine.dispose()
     await app.state.redis.aclose()
+    await app.state.broker_redis.aclose()
     logger.info("app_shutdown")
 
 
@@ -162,6 +169,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    # Read once, at construction: the middleware stack is fixed for the app's
+    # lifetime, so toggling `metrics_enabled` on a live app only closes the
+    # scrape endpoint (which re-reads it per request) — collection keeps
+    # running. Flipping it is a restart-scoped operation.
     if settings.metrics_enabled:
         app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestContextMiddleware)

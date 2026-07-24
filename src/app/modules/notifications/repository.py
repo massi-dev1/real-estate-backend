@@ -198,6 +198,14 @@ class NotificationsRepository:
         # attempt, on every channel, passes through it. Counted per *attempt*
         # (not post-commit): the metric answers "of the deliveries we tried,
         # what fraction succeeded", so a retried send legitimately counts twice.
+        #
+        # That does mean a rolled-back transaction leaves a counted send with no
+        # audit row. Deliberate, and the right way round: by the time log_send
+        # runs the email has already left the SMTP adapter, so counting
+        # post-commit (the `on_commit` treatment leads_created_total gets, where
+        # a rolled-back capture really did create nothing) would under-report
+        # genuinely-delivered mail. Metric and table can drift by a rollback;
+        # the metric stays the honest record of what was attempted.
         record_notification_send(channel.value, status.value)
 
     # ---- digest queue ----
