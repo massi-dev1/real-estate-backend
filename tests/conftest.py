@@ -23,6 +23,11 @@ os.environ["STORAGE_ACCESS_KEY"] = "minio"
 os.environ["STORAGE_SECRET_KEY"] = "minio12345"
 os.environ["STORAGE_MEDIA_BUCKET"] = "media-test"
 os.environ["STORAGE_DOCS_BUCKET"] = "media-private-test"
+# The suite never reaches a third party (§13): the breached-password check is
+# off by default here, and the tests that exercise it inject a fake checker or
+# monkeypatch the transport. Leaving it on would add a network round trip to
+# every register/reset in the suite — and make it fail offline.
+os.environ["HIBP_ENABLED"] = "false"
 
 import subprocess
 import sys

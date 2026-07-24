@@ -75,5 +75,11 @@ repos:
           - "opentelemetry-instrumentation-fastapi>=0.51b0"
           - "opentelemetry-instrumentation-sqlalchemy>=0.51b0"
           - "opentelemetry-instrumentation-celery>=0.51b0"
+          # Data protection (§10.7, Part 30) and MFA (§7.1, Part 29): both ship
+          # py.typed, so their absence here was a real hook-only failure (the
+          # project venv has them, the isolated env did not). authlib ships no
+          # py.typed and is covered by ignore_missing_imports instead.
+          - "cryptography>=49.0.0"
+          - "pyotp>=2.10"
         args: ["--config-file=pyproject.toml"]
         pass_filenames: false

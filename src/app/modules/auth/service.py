@@ -1,16 +1,21 @@
-"""Auth business logic (§7.1): sessions, token rotation with reuse detection,
-password reset and email verification.
+"""Auth business logic (§7.1, §10.3): sessions, token rotation with reuse
+detection, password reset, email verification, account lockout, MFA/TOTP and
+the OAuth seam.
 
 Identity data lives in the users module and is reached only through its
-service (module-boundary rule §5). This module owns the session table, the
-refresh-token lifecycle and the single-use Redis tokens:
+service (module-boundary rule §5) — the password hash and the TOTP secret
+never cross that boundary. This module owns the session table, the OAuth
+identity links, the refresh-token lifecycle and the Redis-backed tokens:
 
-- ``auth:reset:{sha256}``  → user id (TTL 30 min)
-- ``auth:verify:{sha256}`` → user id (TTL 24 h)
-- ``auth:jti:deny:{jti}``  → logout denylist (TTL = access-token lifetime)
+- ``auth:reset:{sha256}``   → user id (TTL 30 min)
+- ``auth:verify:{sha256}``  → user id (TTL 24 h)
+- ``auth:jti:deny:{jti}``   → logout denylist (TTL = access-token lifetime)
+- ``auth:mfa:{sha256}``     → pending second-factor ticket (TTL 5 min)
+- ``auth:oauth:{sha256}``   → OAuth CSRF state (TTL 10 min)
+- ``auth:lockout:*``        → failed-login counters (``core.lockout``)
 
-Deliberately deferred (§7.1, later hardening part): MFA/TOTP, OAuth,
-account-lockout backoff, breached-password checks, session-list endpoint.
+Deliberately deferred: passkeys/WebAuthn, SMS as a second factor (no adapter
+exists, §8.12), and a live OAuth client (credential-gated).
 """
 
 import secrets
@@ -26,7 +31,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import Settings
 from app.core.database import SessionDep, set_tenant_guc
-from app.core.exceptions import UnauthorizedError
+from app.core.exceptions import (
+    BreachedPasswordError,
+    ConflictError,
+    FeatureNotConfiguredError,
+    NotFoundError,
+    UnauthorizedError,
+)
+from app.core.lockout import LoginLockout
+from app.core.permissions import Role
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -34,8 +47,11 @@ from app.core.security import (
     jti_denylist_key,
     user_jtis_key,
 )
-from app.modules.auth.models import AuthSession
-from app.modules.auth.repository import SessionRepository
+from app.integrations.auth_oauth.base import OAuthError, OAuthProfile, OAuthProvider
+from app.integrations.auth_oauth.registry import build_oauth_provider
+from app.integrations.breach.hibp import build_breach_checker
+from app.modules.auth.models import AuthSession, OAuthIdentity
+from app.modules.auth.repository import OAuthIdentityRepository, SessionRepository
 from app.modules.auth.schemas import LoginRequest, RegisterRequest
 from app.modules.users.service import UserIdentity, UserService, get_user_service
 from app.workers.tasks.email import send_email
@@ -44,6 +60,15 @@ logger = structlog.get_logger(__name__)
 
 _RESET_KEY = "auth:reset:{}"
 _VERIFY_KEY = "auth:verify:{}"
+_MFA_KEY = "auth:mfa:{}"
+_OAUTH_STATE_KEY = "auth:oauth:{}"
+_OAUTH_STATE_TTL_SECONDS = 600
+
+# Roles for which a verified second factor is mandatory once enrolled, and
+# which are prompted to enrol (§7.1). These are the accounts that can publish
+# listings, move money and read the whole tenant's CRM; a buyer's favourites
+# list does not warrant forcing a hardware step on every visitor.
+MFA_ENFORCED_ROLES: frozenset[Role] = frozenset({Role.ADMIN, Role.TEAM_LEAD, Role.AGENT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +76,14 @@ class IssuedTokens:
     user: UserIdentity
     access_token: str
     refresh_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class MfaChallenge:
+    """A login that passed the password but still owes a second factor."""
+
+    mfa_token: str
+    expires_in: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,18 +108,38 @@ class AuthService:
         redis: Redis,
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
+        oauth_identities: OAuthIdentityRepository | None = None,
     ) -> None:
         self.users = users
         self.sessions = sessions
         self.redis = redis
         self.settings = settings
         self.session_factory = session_factory
+        self.oauth_identities = oauth_identities or OAuthIdentityRepository(sessions.session)
+        self.lockout = LoginLockout(redis, settings)
+        self.breach = build_breach_checker(settings)
+
+    # ---- password policy (§10.3) ----
+
+    async def _reject_breached_password(self, password: str) -> None:
+        """Refuse a password known to be in a public breach corpus.
+
+        422 rather than 401/409: the payload *is* the problem and the caller
+        can fix it by choosing differently, which is exactly what a validation
+        error means here. Fail-open on an HIBP outage is handled inside the
+        checker (documented there) — this never blocks on a third party.
+        """
+        if await self.breach.is_breached(password):
+            raise BreachedPasswordError(
+                "This password has appeared in a known data breach. Please choose a different one."
+            )
 
     # ---- registration / login ----
 
     async def register(
         self, tenant_id: uuid.UUID, data: RegisterRequest, client: ClientInfo
     ) -> IssuedTokens:
+        await self._reject_breached_password(data.password)
         identity = await self.users.register_account(
             tenant_id,
             email=data.email,
@@ -102,17 +155,96 @@ class AuthService:
 
     async def login(
         self, tenant_id: uuid.UUID | None, data: LoginRequest, client: ClientInfo
-    ) -> IssuedTokens:
+    ) -> IssuedTokens | MfaChallenge:
+        """Password step. Returns tokens, or an :class:`MfaChallenge` when the
+        account owes a second factor (§7.1).
+
+        Every failure path — locked out, unknown email, wrong password,
+        disabled account — raises the *same* generic 401. A distinct "account
+        locked" response would confirm the address exists and tell an attacker
+        their run is working; the lockout is meant to be felt as slowness, not
+        read as a signal.
+        """
+        lock_scope = str(tenant_id) if tenant_id is not None else "platform"
+        ip = client.ip or "unknown"
+        if await self.lockout.is_locked(lock_scope, data.email, ip):
+            logger.info("login_blocked_by_lockout", tenant_id=lock_scope)
+            raise UnauthorizedError("Invalid email or password.")
+
         identity = await self.users.verify_credentials(tenant_id, data.email, data.password)
         if identity is None:
+            await self.lockout.record_failure(lock_scope, data.email, ip)
             # One generic message for unknown email / wrong password / disabled.
             raise UnauthorizedError("Invalid email or password.")
+
+        # The password was right, so this source and account are not under a
+        # (successful) attack — clear the counters before anything else, or a
+        # person who mistyped four times would stay one slip from a lockout.
+        await self.lockout.reset(lock_scope, data.email, ip)
+
+        if self._mfa_required(identity):
+            return await self._start_mfa_challenge(identity)
+        return await self._issue(identity, client, family_id=None)
+
+    def _mfa_required(self, identity: UserIdentity) -> bool:
+        """A factor is demanded only when one actually exists on the account.
+
+        Enforcement for privileged roles is a *prompt to enrol* (surfaced by
+        ``/auth/mfa/status``), not a hard login block: flipping the setting on
+        would otherwise instantly lock out every existing admin, including the
+        one who would have to fix it.
+        """
+        return identity.mfa_enabled
+
+    async def _start_mfa_challenge(self, identity: UserIdentity) -> MfaChallenge:
+        """Mint the short-lived ticket that the verify step consumes.
+
+        Stored hashed (like every other Redis token here) and pinned to the
+        tenant, so a ticket minted on agency A cannot be redeemed on B.
+        """
+        token = secrets.token_urlsafe(32)
+        ttl = self.settings.mfa_pending_token_ttl_seconds
+        tenant_part = str(identity.tenant_id) if identity.tenant_id else ""
+        await self.redis.set(
+            _MFA_KEY.format(hash_token(token)), f"{tenant_part}:{identity.id}", ex=ttl
+        )
+        return MfaChallenge(mfa_token=token, expires_in=ttl)
+
+    async def verify_mfa(
+        self, tenant_id: uuid.UUID | None, mfa_token: str, code: str, client: ClientInfo
+    ) -> IssuedTokens:
+        """Second step: redeem the ticket with a valid TOTP code.
+
+        The ticket is consumed with ``GETDEL`` *before* the code is checked, so
+        one ticket buys exactly one guess — otherwise a five-minute window
+        would allow unlimited attempts at a six-digit code, which is a million
+        guesses' worth of headroom.
+        """
+        raw = await self.redis.getdel(_MFA_KEY.format(hash_token(mfa_token)))
+        if raw is None:
+            raise UnauthorizedError("The verification session has expired. Please sign in again.")
+        value = raw if isinstance(raw, str) else raw.decode()
+        tenant_part, _, user_part = value.partition(":")
+        expected_tenant = str(tenant_id) if tenant_id is not None else ""
+        if tenant_part != expected_tenant:
+            raise UnauthorizedError("The verification session is invalid.")
+
+        user_id = uuid.UUID(user_part)
+        if not await self.users.verify_mfa_code(tenant_id, user_id, code, self.settings):
+            # The ticket is already spent: a wrong code costs a full re-login,
+            # which bounds online guessing far more tightly than a rate limit.
+            raise UnauthorizedError("That code is not valid. Please sign in again.")
+
+        identity = await self.users.get_identity_if_active(tenant_id, user_id)
+        if identity is None:
+            raise UnauthorizedError("The verification session is invalid.")
         return await self._issue(identity, client, family_id=None)
 
     async def _issue(
         self, identity: UserIdentity, client: ClientInfo, *, family_id: uuid.UUID | None
     ) -> IssuedTokens:
         refresh_token = generate_refresh_token()
+        now = datetime.now(UTC)
         self.sessions.add(
             AuthSession(
                 user_id=identity.id,
@@ -121,7 +253,8 @@ class AuthService:
                 family_id=family_id or uuid.uuid4(),
                 user_agent=client.user_agent,
                 ip=client.ip,
-                expires_at=datetime.now(UTC) + timedelta(days=self.settings.refresh_token_ttl_days),
+                last_used_at=now,
+                expires_at=now + timedelta(days=self.settings.refresh_token_ttl_days),
             )
         )
         await self.sessions.flush()
@@ -263,6 +396,10 @@ class AuthService:
     async def reset_password(
         self, tenant_id: uuid.UUID | None, token: str, new_password: str
     ) -> None:
+        # Checked before the token is consumed: a rejected password must not
+        # burn the single-use reset code, or the person is locked out of their
+        # own recovery flow by a typo in their *new* password.
+        await self._reject_breached_password(new_password)
         user_id = await self._consume_token(_RESET_KEY.format(hash_token(token)))
         identity = await self.users.set_password(tenant_id, user_id, new_password)
         if identity is None:
@@ -307,6 +444,172 @@ class AuthService:
         if value is None:
             raise UnauthorizedError("The token is invalid or has expired.")
         return uuid.UUID(value if isinstance(value, str) else value.decode())
+
+    # ---- session list / "log out other devices" (§10.3) ----
+
+    async def list_sessions(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, *, presented_token: str | None
+    ) -> list[tuple[AuthSession, bool]]:
+        """Live sessions, each flagged with whether it is the caller's own.
+
+        The flag comes from matching the *presented refresh token's* hash, not
+        from the access token: the access jti is not stored on the session row,
+        and the refresh token is what actually identifies a device's chain.
+        """
+        rows = await self.sessions.list_active_for_user(tenant_id, user_id)
+        current_hash = hash_token(presented_token) if presented_token else None
+        return [(row, row.refresh_token_hash == current_hash) for row in rows]
+
+    async def revoke_session(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, session_id: uuid.UUID
+    ) -> None:
+        """Kill one session by id. Scoped to the caller's own rows: a 404 for
+        anyone else's session, so the endpoint is not an oracle for which
+        session ids exist."""
+        row = await self.sessions.get(tenant_id, session_id)
+        if row is None or row.user_id != user_id:
+            raise NotFoundError("Session not found.")
+        if row.revoked_at is None:
+            row.revoked_at = datetime.now(UTC)
+            await self.sessions.flush()
+        # Only the refresh chain dies here: the access token minted from it is
+        # not identifiable from this row, and it expires within 15 minutes.
+        # Killing *every* live token of the user is what `logout-all` is for.
+
+    # ---- MFA (§7.1) ----
+
+    async def begin_mfa_enrolment(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID
+    ) -> tuple[str, str]:
+        """Returns ``(provisioning_uri, secret)`` for the caller to render."""
+        return await self.users.begin_mfa_enrolment(
+            tenant_id, user_id, issuer=self.settings.mfa_issuer
+        )
+
+    async def confirm_mfa_enrolment(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, code: str
+    ) -> None:
+        if not await self.users.confirm_mfa_enrolment(tenant_id, user_id, code, self.settings):
+            raise UnauthorizedError("That code is not valid. Please try again.")
+
+    async def disable_mfa(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, password: str
+    ) -> None:
+        if not await self.users.check_password(tenant_id, user_id, password):
+            raise UnauthorizedError("The password is incorrect.")
+        await self.users.disable_mfa(tenant_id, user_id)
+
+    # ---- OAuth social login (§7.1, seam) ----
+
+    async def start_oauth(self, tenant_id: uuid.UUID | None, provider_key: str) -> tuple[str, str]:
+        """Returns ``(authorization_url, state)``.
+
+        ``state`` is a single-use CSRF nonce held in Redis and pinned to the
+        tenant, so a callback cannot be replayed, nor a code obtained on one
+        agency's flow redeemed on another's.
+        """
+        provider = self._oauth_provider(provider_key)
+        state = secrets.token_urlsafe(24)
+        tenant_part = str(tenant_id) if tenant_id is not None else ""
+        await self.redis.set(
+            _OAUTH_STATE_KEY.format(hash_token(state)),
+            f"{tenant_part}:{provider_key}",
+            ex=_OAUTH_STATE_TTL_SECONDS,
+        )
+        return provider.authorization_url(
+            redirect_uri=self._oauth_redirect_uri(provider_key), state=state
+        ), state
+
+    async def complete_oauth(
+        self,
+        tenant_id: uuid.UUID,
+        provider_key: str,
+        *,
+        code: str,
+        state: str,
+        client: ClientInfo,
+    ) -> IssuedTokens:
+        provider = self._oauth_provider(provider_key)
+        stored = await self.redis.getdel(_OAUTH_STATE_KEY.format(hash_token(state)))
+        if stored is None:
+            raise UnauthorizedError("The sign-in attempt has expired. Please try again.")
+        value = stored if isinstance(stored, str) else stored.decode()
+        if value != f"{tenant_id}:{provider_key}":
+            raise UnauthorizedError("The sign-in attempt is invalid.")
+
+        try:
+            profile = await provider.exchange_code(
+                code=code, redirect_uri=self._oauth_redirect_uri(provider_key)
+            )
+        except OAuthError as exc:
+            logger.warning("oauth_exchange_failed", provider=provider_key, permanent=exc.permanent)
+            raise UnauthorizedError("Sign-in with this provider failed. Please try again.") from exc
+
+        identity = await self._link_or_create_oauth_account(tenant_id, provider_key, profile)
+        return await self._issue(identity, client, family_id=None)
+
+    async def _link_or_create_oauth_account(
+        self, tenant_id: uuid.UUID, provider_key: str, profile: OAuthProfile
+    ) -> UserIdentity:
+        """Resolve an external profile to a local account.
+
+        Three cases, in order: an existing link wins outright; otherwise an
+        account with the same address is linked — but **only if the provider
+        says it verified that address**, since an unverified provider email is
+        an account-takeover primitive (claim someone's address at the provider,
+        sign in as them here); otherwise a new self-registration-tier account
+        is created with an unusable random password (the person signs in
+        socially, and can set a real password through the reset flow).
+        """
+        link = await self.oauth_identities.get_by_subject(tenant_id, provider_key, profile.subject)
+        if link is not None:
+            identity = await self.users.get_identity_if_active(tenant_id, link.user_id)
+            if identity is None:
+                raise UnauthorizedError("This account is no longer active.")
+            return identity
+
+        if not profile.email:
+            raise ConflictError("The provider did not supply an email address.")
+
+        existing = await self.users.get_identity_by_email(tenant_id, profile.email)
+        if existing is not None and not profile.email_verified:
+            raise ConflictError(
+                "An account already exists for this email. Sign in with your password instead."
+            )
+
+        identity = existing or await self.users.register_account(
+            tenant_id,
+            email=profile.email,
+            password=secrets.token_urlsafe(32),
+            role=Role.BUYER_RENTER,
+            first_name=profile.first_name,
+            last_name=profile.last_name,
+        )
+        self.oauth_identities.add(
+            OAuthIdentity(
+                user_id=identity.id,
+                tenant_id=tenant_id,
+                provider=provider_key,
+                subject=profile.subject,
+                email=profile.email,
+            )
+        )
+        await self.oauth_identities.flush()
+        if profile.email_verified:
+            await self.users.mark_email_verified(tenant_id, identity.id)
+        return identity
+
+    def _oauth_provider(self, provider_key: str) -> OAuthProvider:
+        provider = build_oauth_provider(self.settings, provider_key)
+        if provider is None:
+            raise FeatureNotConfiguredError(
+                f"Social sign-in with '{provider_key}' is not configured on this deployment."
+            )
+        return provider
+
+    def _oauth_redirect_uri(self, provider_key: str) -> str:
+        base = self.settings.oauth_redirect_base_url.rstrip("/")
+        return f"{base}/api/v1/auth/oauth/{provider_key}/callback"
 
     async def _send(self, to: str, subject: str, text: str) -> None:
         """Fail-soft: a broker hiccup must not turn registration or the

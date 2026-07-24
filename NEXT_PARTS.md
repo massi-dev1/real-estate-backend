@@ -8,14 +8,14 @@ then paste that part's prompt below to Claude as-is (or lightly adapt).
 Parts 25–33 are the **production-hardening phases** that close the cross-cutting
 blueprint concerns deferred out of the module parts: §10 security, §11 caching,
 §13 test infra, §14 observability, §15 CI/CD, §16 deployment, §18 checklist.
-**Parts 25 (deployment), 26 (CI/CD), 27 (observability), 28 (edge security) and
-30 (data-protection primitives) are done.**
+**Parts 25 (deployment), 26 (CI/CD), 27 (observability), 28 (edge security),
+30 (data-protection primitives) and 29 (auth hardening) are done.**
 The full plan lives at
 `~/.claude/plans/okay-build-a-workflow-lucky-crayon.md`.
 
-**Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → 30 → **29** → 31 → 32 → 33.
-(Part 30's crypto helper now exists — `core/crypto.py`'s `EncryptedString` —
-so Part 29 can field-encrypt the MFA secret with it.)
+**Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → 30 → 29 → **31** → 32 → 33.
+(Part 30's crypto helper `core/crypto.py`'s `EncryptedString` field-encrypts the
+Part 29 MFA secret. Next undone: **Part 31 — outbox + outbound webhooks**.)
 
 General rules that apply to every part (already in `CLAUDE.md`, repeated here so
 they're not missed): one part at a time; query `graphify-out/` before searching

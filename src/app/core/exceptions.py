@@ -88,6 +88,35 @@ class RateLimitedError(AppError):
     title = "Too Many Requests"
 
 
+class BreachedPasswordError(AppError):
+    """The chosen password appears in a public breach corpus (§10.3).
+
+    422, not 401/409: the submitted payload is what is wrong and the caller
+    fixes it by choosing differently — the same class of answer as any other
+    failed field validation. A distinct slug lets a frontend show the specific
+    "pick another password" hint rather than a generic validation blob.
+    """
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    slug = "breached-password"
+    title = "Password Found In Breach"
+
+
+class FeatureNotConfiguredError(AppError):
+    """A feature whose integration seam exists but has no credentials on this
+    deployment (e.g. social login, §7.1).
+
+    501, not 404: the route genuinely exists and is part of the API — it is the
+    *implementation* that is absent here. That distinction is what lets a
+    frontend tell "this build cannot do it" apart from "you typed the wrong
+    URL", and it never invites a retry the way a 503 would.
+    """
+
+    status_code = status.HTTP_501_NOT_IMPLEMENTED
+    slug = "feature-not-configured"
+    title = "Feature Not Configured"
+
+
 class InvalidWebhookError(AppError):
     status_code = status.HTTP_400_BAD_REQUEST
     slug = "invalid-webhook"

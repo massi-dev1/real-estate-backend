@@ -13,8 +13,10 @@ from typing import Annotated
 from fastapi import Depends
 from sqlalchemy.exc import IntegrityError
 
+from app.core.config import Settings
 from app.core.database import SessionDep, set_tenant_guc
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.mfa import generate_totp_secret, provisioning_uri, verify_totp
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import PLATFORM_ROLES, Role
 from app.core.security import DUMMY_PASSWORD_HASH, hash_password, verify_password
@@ -35,6 +37,9 @@ class UserIdentity:
     email_verified_at: datetime | None
     first_name: str | None = None
     last_name: str | None = None
+    # Whether a *live* second factor exists (§7.1). The secret itself never
+    # crosses this boundary — auth asks this module to verify a code instead.
+    mfa_enabled: bool = False
 
     @property
     def display_name(self) -> str:
@@ -54,6 +59,7 @@ def _to_identity(user: User) -> UserIdentity:
         email_verified_at=user.email_verified_at,
         first_name=user.first_name,
         last_name=user.last_name,
+        mfa_enabled=user.mfa_enabled,
     )
 
 
@@ -336,6 +342,77 @@ class UserService:
         user.password_hash = hash_password(new_password)
         await self.repo.flush()
         return _to_identity(user)
+
+    # ---- MFA (§7.1): the TOTP secret never leaves this module ----
+
+    async def begin_mfa_enrolment(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, *, issuer: str
+    ) -> tuple[str, str]:
+        """Mint (or replace) a pending TOTP secret and return
+        ``(provisioning_uri, secret)`` for the caller to render as a QR code
+        plus a manual-entry fallback.
+
+        This is the one place a live secret crosses the module boundary, and it
+        goes only to the already-authenticated owner who is about to store it
+        in their own authenticator app — the whole point of enrolment.
+
+        The secret is stored but ``mfa_enabled`` stays false: an enrolment that
+        is started and abandoned must never demand a factor the person cannot
+        produce. Re-enrolling while already enabled is allowed (a lost phone) —
+        but it does **not** disable the live factor until the new one verifies,
+        so a hijacked session cannot silently swap the second factor out.
+        """
+        user = await self._get_or_404(tenant_id, user_id)
+        secret = generate_totp_secret()
+        user.mfa_secret = secret
+        await self.repo.flush()
+        return provisioning_uri(secret, account_name=user.email, issuer=issuer), secret
+
+    async def confirm_mfa_enrolment(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, code: str, settings: Settings
+    ) -> bool:
+        """Activate the pending factor if ``code`` proves the person holds it."""
+        user = await self._get_or_404(tenant_id, user_id)
+        if not user.mfa_secret:
+            raise ConflictError("Start MFA enrolment before confirming it.")
+        if not verify_totp(user.mfa_secret, code, settings):
+            return False
+        user.mfa_enabled = True
+        user.mfa_enrolled_at = datetime.now(UTC)
+        await self.repo.flush()
+        return True
+
+    async def verify_mfa_code(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, code: str, settings: Settings
+    ) -> bool:
+        """Check a login-time second factor. ``False`` for a wrong code *and*
+        for an account with no live factor — the caller must not be able to
+        distinguish the two."""
+        user = await self.repo.get(tenant_id, user_id)
+        if user is None or not user.mfa_enabled or not user.mfa_secret:
+            return False
+        return verify_totp(user.mfa_secret, code, settings)
+
+    async def disable_mfa(self, tenant_id: uuid.UUID | None, user_id: uuid.UUID) -> None:
+        """Clear the factor entirely (the person re-enrols from scratch). The
+        router demands the current password first — otherwise a stolen session
+        could strip the very control protecting the account."""
+        user = await self._get_or_404(tenant_id, user_id)
+        user.mfa_enabled = False
+        user.mfa_enrolled_at = None
+        user.mfa_secret = None
+        await self.repo.flush()
+
+    async def check_password(
+        self, tenant_id: uuid.UUID | None, user_id: uuid.UUID, password: str
+    ) -> bool:
+        """Re-authenticate the *current* session's owner before a sensitive
+        change (disabling MFA). Not a login path — no lockout, no identity
+        returned, just a yes/no on a caller who already holds a valid token."""
+        user = await self.repo.get(tenant_id, user_id)
+        if user is None:
+            return False
+        return verify_password(password, user.password_hash)
 
     async def mark_email_verified(
         self, tenant_id: uuid.UUID | None, user_id: uuid.UUID

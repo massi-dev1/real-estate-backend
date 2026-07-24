@@ -150,6 +150,41 @@ class Settings(BaseSettings):
     # re-executing it. 24h covers a client retrying well after a timeout.
     idempotency_key_ttl_seconds: int = 86_400
 
+    # Account lockout / backoff (§7.1). Failed logins are counted per account
+    # *and* per source IP; past the threshold the account is locked for a
+    # window that doubles per further failure, up to a cap. Unlike the rate
+    # limiter (which degrades open by design, §10.2), this is the layer that
+    # actually stands between an attacker and one specific account.
+    login_max_failed_attempts: int = 5
+    login_lockout_base_seconds: int = 60
+    login_lockout_max_seconds: int = 3600
+    # The window a failed-attempt counter survives without a further failure.
+    login_failure_window_seconds: int = 900
+
+    # Breached-password check (§10.3): Have I Been Pwned's k-anonymity range
+    # API — only the first 5 hex chars of the password's SHA-1 ever leave the
+    # process, never the password or the full hash. Deliberately **fail-open**:
+    # a third party being down must not block signup or a password reset.
+    hibp_enabled: bool = True
+    hibp_api_url: str = "https://api.pwnedpasswords.com/range"
+    hibp_timeout_seconds: float = 3.0
+
+    # MFA/TOTP (§7.1). Enforced at login for the roles listed here (privileged
+    # back-office accounts) once they have completed enrolment; anyone may
+    # enrol voluntarily. The MFA-pending token is a short-lived second-factor
+    # ticket, not a session — it grants nothing but the verify step.
+    mfa_issuer: str = "Real Estate Platform"
+    mfa_pending_token_ttl_seconds: int = 300
+    # TOTP tolerance either side of the current 30s step, for clock skew.
+    mfa_totp_valid_window: int = 1
+
+    # OAuth social login (§7.1) — seam only, offline-safe. Without a client id
+    # and secret the routes report "not configured" instead of half-working;
+    # setting both flips the provider on with no code change.
+    oauth_google_client_id: str = ""
+    oauth_google_client_secret: str = ""
+    oauth_redirect_base_url: str = ""
+
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".
     problem_type_base: str = "https://api.realestate.example/errors/"
 
