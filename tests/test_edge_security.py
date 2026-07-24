@@ -10,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from starlette.types import Receive, Scope, Send
 
 from app.core.config import Settings, get_settings
-from app.core.cors import origin_host
+from app.core.cors import TenantCORSMiddleware, origin_host, strip_port
 from app.core.middleware import API_CSP, DOCS_CSP, SecurityHeadersMiddleware
 from app.main import create_app
 from tests.helpers import HOST_A, HOST_B
@@ -105,6 +105,40 @@ def test_origin_host_parsing(origin: str, expected: str) -> None:
     assert origin_host(origin) == expected
 
 
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("agency-a.test", "agency-a.test"),
+        ("agency-a.test:8443", "agency-a.test"),
+        ("AGENCY-A.test", "agency-a.test"),
+        # A bare split(":") would mangle these to "[" and "[2001".
+        ("[::1]:8000", "[::1]"),
+        ("[2001:db8::1]", "[2001:db8::1]"),
+        # Unterminated bracket: unparseable, so it must not match anything.
+        ("[bad", ""),
+        ("", ""),
+    ],
+)
+def test_host_port_stripping(host: str, expected: str) -> None:
+    """The ``Host`` parse must agree with the ``Origin`` parse on what host a
+    value names — including IPv6 literals."""
+    assert strip_port(host) == expected
+
+
+async def test_same_ipv6_host_is_allowed() -> None:
+    """An IPv6-literal deployment is same-origin with itself. Parsing ``Host``
+    with a bare ``split(":")`` yields ``"["`` and silently denies every such
+    request, so this asserts the two parses agree."""
+
+    async def noop(scope: Scope, receive: Receive, send: Send) -> None: ...
+
+    middleware = TenantCORSMiddleware(noop, get_settings())
+    scope: Scope = {"type": "http", "headers": [(b"host", b"[::1]:8000")], "app": None}
+    assert await middleware._is_allowed(scope, "http://[::1]:3000") is True
+    # A *different* IPv6 host must still be refused — the fix must not widen.
+    assert await middleware._is_allowed(scope, "http://[::2]:3000") is False
+
+
 async def test_cors_reflects_the_tenants_own_domain(
     client: AsyncClient, platform_headers: dict[str, str]
 ) -> None:
@@ -176,6 +210,28 @@ async def test_preflight_rejected_for_a_foreign_origin(
     )
     assert resp.status_code == 403
     assert "access-control-allow-origin" not in resp.headers
+
+
+@pytest.mark.parametrize("origin", [ORIGIN_A, ORIGIN_B])
+async def test_preflight_still_carries_security_headers(
+    client: AsyncClient, platform_headers: dict[str, str], origin: str
+) -> None:
+    """CORS answers a preflight itself, *outside* SecurityHeadersMiddleware, so
+    without explicit stamping it would be the one response in the app carrying
+    no security headers — on both the allowed and the rejected path."""
+    await create_two_tenants(client, platform_headers)
+    resp = await client.request(
+        "OPTIONS",
+        "/api/v1/auth/login",
+        headers={
+            "Host": HOST_A,
+            "Origin": origin,
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert resp.headers["content-security-policy"] == API_CSP
+    assert resp.headers["x-content-type-options"] == "nosniff"
+    assert resp.headers["x-frame-options"] == "DENY"
 
 
 async def test_cors_never_returns_a_wildcard(

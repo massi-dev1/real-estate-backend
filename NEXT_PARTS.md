@@ -30,29 +30,6 @@ log, then commit — code review and graph updates stay manual (done by the user
 ---
 
 
-## Part 28 — Edge security hardening (§10.1–§10.2)
-
-Harden the request edge to match §10. In `SecurityHeadersMiddleware`
-(`core/middleware.py`) add **HSTS** (`max-age=31536000; includeSubDomains`, sent
-only in staging/production or over TLS — config-gated so local http dev is
-unaffected) and a restrictive **CSP** for the API's own HTML (`/docs` when
-enabled — default-deny with just the allowances Swagger UI needs). Replace the
-static-env CORS in `main.py` with a **dynamic allowlist built from
-`tenant_domains`** (§10.1): a custom CORS middleware that resolves the request's
-tenant via the existing Redis-cached `DomainTenantResolver` and reflects an
-`Origin` only when it matches a verified domain for that tenant — never `*` with
-credentials; keep the static env list as an additive platform/admin allowlist.
-Add **layered rate limits** (§10.2): a **global per-IP** budget as ASGI
-middleware (reuse `core/rate_limit.py`'s Redis sliding-window logic,
-degrade-open) and **per-endpoint limits on `login`/`register`/`refresh`/
-`password-reset`** (the `rate_limit` factory whose docstring already says auth
-"can adopt later without rework") — return `429 + Retry-After`. Tests: HSTS
-present only when prod/TLS-gated; CORS reflects a verified tenant domain and
-rejects an unknown origin; login 429s after N attempts; global limiter degrades
-open when Redis is down. Update the log and commit.
-
----
-
 ## Part 30 — Data-protection primitives: field encryption + Idempotency-Key (§10.7, §9)
 
 Build two reusable security primitives other parts consume (this lands **before**

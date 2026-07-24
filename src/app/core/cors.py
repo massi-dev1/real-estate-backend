@@ -37,6 +37,7 @@ from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.core.config import Settings
+from app.core.middleware import API_CSP, SECURITY_HEADERS
 from app.core.tenancy import TenantResolver
 
 logger = structlog.get_logger(__name__)
@@ -50,6 +51,24 @@ EXPOSE_HEADERS = "X-Request-ID, Retry-After"
 PREFLIGHT_MAX_AGE = "600"
 
 
+def strip_port(host: str) -> str:
+    """A bare hostname with any trailing port removed.
+
+    Shared by the ``Origin`` and ``Host`` parses so the two can never disagree
+    about what host a value names — a plain ``split(":")[0]`` mangles a
+    bracketed IPv6 literal (``[::1]:8000`` becomes ``[``), which would break
+    the same-host comparison for every IPv6 deployment.
+    """
+    host = host.strip()
+    if host.startswith("["):
+        # Bracketed IPv6 literal: keep the brackets, drop only a trailing port.
+        literal, sep, _ = host.partition("]")
+        if not sep:
+            return ""
+        return f"{literal}]".lower()
+    return host.split(":")[0].strip().lower()
+
+
 def origin_host(origin: str) -> str:
     """The bare hostname of an ``Origin`` value (scheme and port stripped).
 
@@ -59,12 +78,22 @@ def origin_host(origin: str) -> str:
     _, _, rest = origin.partition("://")
     if not rest:
         return ""
-    host = rest.split("/")[0]
-    # Bracketed IPv6 literal: keep the brackets, drop only a trailing port.
-    if host.startswith("["):
-        host, _, _ = host.partition("]")
-        return f"{host}]".lower()
-    return host.split(":")[0].strip().lower()
+    return strip_port(rest.split("/")[0])
+
+
+def _apply_baseline_headers(response: PlainTextResponse) -> None:
+    """Stamp the baseline security headers onto a preflight reply.
+
+    This middleware sits *outside* ``SecurityHeadersMiddleware``, and a
+    preflight is answered here without ever calling through, so it would
+    otherwise be the one response in the app carrying no security headers at
+    all. The body is inert text a browser never renders, so this is
+    consistency rather than a live exploit — but "every response carries
+    them" is a far easier invariant to keep than a documented exception.
+    """
+    for key, value in SECURITY_HEADERS:
+        response.headers[key.decode("latin-1")] = value.decode("latin-1")
+    response.headers["content-security-policy"] = API_CSP
 
 
 class TenantCORSMiddleware:
@@ -84,7 +113,7 @@ class TenantCORSMiddleware:
             return False
 
         headers = Headers(scope=scope)
-        target = headers.get("host", "").split(":")[0].strip().lower()
+        target = strip_port(headers.get("host", ""))
         if not target:
             return False
         # Same host: same-origin in every practical sense (a differing scheme
@@ -129,12 +158,14 @@ class TenantCORSMiddleware:
                 # 403 rather than a 200 with no CORS headers: the browser
                 # blocks either way, but this is honest in the network log.
                 response = PlainTextResponse("CORS origin not allowed", status_code=403)
+                _apply_baseline_headers(response)
                 await response(scope, receive, send)
                 return
             response = PlainTextResponse("OK", status_code=200, headers=self._allow_headers(origin))
             response.headers["access-control-allow-methods"] = ALLOW_METHODS
             response.headers["access-control-allow-headers"] = ALLOW_HEADERS
             response.headers["access-control-max-age"] = PREFLIGHT_MAX_AGE
+            _apply_baseline_headers(response)
             await response(scope, receive, send)
             return
 
