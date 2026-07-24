@@ -25,9 +25,10 @@ from urllib.parse import quote
 import structlog
 from fastapi import Depends
 
-from app.core.database import SessionDep
+from app.core.database import SessionDep, on_commit
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.core.i18n import DEFAULT_LOCALE, pick_localized
+from app.core.metrics import record_lead_created
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Role
 from app.core.tenancy import TenantContext
@@ -461,6 +462,15 @@ class LeadsService:
         )
         return lead
 
+    def _count_lead_created(self, source: LeadSource) -> None:
+        """Bump the §14 leads/hour counter — post-commit, so a capture that
+        rolls back never inflates it."""
+
+        async def _bump() -> None:
+            record_lead_created(source.value)
+
+        on_commit(self.repo.session, _bump)
+
     async def _create_captured_lead(
         self,
         tenant: TenantContext,
@@ -536,6 +546,7 @@ class LeadsService:
                     payload={"leadId": str(lead_id), "email": identity.email},
                     locale=identity.locale,
                 )
+        self._count_lead_created(source)
         return lead
 
     # ---- assignment engine ----
@@ -707,6 +718,7 @@ class LeadsService:
         await self._recompute_score(tenant.id, lead)
         self._seed_drip(tenant, lead)
         await self.repo.flush()
+        self._count_lead_created(data.source)
         return lead
 
     async def get_portal(

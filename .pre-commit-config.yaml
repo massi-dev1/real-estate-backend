@@ -63,5 +63,17 @@ repos:
           - "pwdlib[argon2]>=0.2"
           - "uuid-utils>=0.10"
           - "aiosmtplib>=5.1.2"
+          # Observability (§14, Part 27). All three ship py.typed, so mypy
+          # resolves them here rather than through ignore_missing_imports.
+          - "prometheus-client>=0.21"
+          - "sentry-sdk>=2.20"
+          - "opentelemetry-sdk>=1.30"
+          - "opentelemetry-exporter-otlp-proto-http>=1.30"
+          # The instrumentation packages carry no py.typed of their own but
+          # live under the typed `opentelemetry` namespace, so mypy needs them
+          # installed to resolve the submodule imports at all.
+          - "opentelemetry-instrumentation-fastapi>=0.51b0"
+          - "opentelemetry-instrumentation-sqlalchemy>=0.51b0"
+          - "opentelemetry-instrumentation-celery>=0.51b0"
         args: ["--config-file=pyproject.toml"]
         pass_filenames: false

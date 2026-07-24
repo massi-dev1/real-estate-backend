@@ -97,6 +97,24 @@ class Settings(BaseSettings):
     ai_timeout_seconds: float = 30.0
     ai_max_output_tokens: int = 1024
 
+    # Observability (§14). Every exporter is opt-in and offline-safe: an empty
+    # DSN / disabled flag turns the feature off, so the app boots with no
+    # telemetry credentials (same stance as the AI/billing stubs).
+    sentry_dsn: str = ""
+    sentry_traces_sample_rate: float = 0.0
+    # Tags every Sentry event with the deployed revision (set from the image
+    # tag / git SHA in CI). Empty = let Sentry infer.
+    sentry_release: str = ""
+    otel_enabled: bool = False
+    otel_exporter_endpoint: str = ""
+    otel_service_name: str = "real-estate-backend"
+    # Prometheus scraping (§14). On by default — it costs nothing without a
+    # scraper and needs no credentials. The endpoint itself is guarded: only
+    # reachable with ``metrics_auth_token`` (when set) or from the proxy's
+    # private network, never public.
+    metrics_enabled: bool = True
+    metrics_auth_token: str = ""
+
     cors_origins: str = ""
 
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".

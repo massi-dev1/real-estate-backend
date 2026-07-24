@@ -6,10 +6,14 @@ pipeline (§8.2), ``sync`` for portal/geocoding work,
 sitting in ``default``. Beat drives scheduled jobs from this same app.
 """
 
+from typing import Any
+
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import worker_process_init
 
 from app.core.config import get_settings
+from app.core.telemetry import init_sentry, instrument_celery
 
 settings = get_settings()
 
@@ -77,6 +81,20 @@ celery_app.conf.update(
 )
 
 celery_app.autodiscover_tasks(["app.workers.tasks"])
+
+
+@worker_process_init.connect
+def _init_worker_telemetry(**_kwargs: Any) -> None:
+    """Error tracking + tracing for the worker process (§14).
+
+    Bound to ``worker_process_init`` rather than module import so it runs once
+    per forked child (each prefork worker is its own process and needs its own
+    Sentry client), and never in eager mode where tasks execute inline in the
+    caller's already-initialised process. Both calls no-op when unconfigured.
+    """
+    init_sentry(settings, component="worker")
+    instrument_celery(settings)
+
 
 celery_app.conf.beat_schedule = {
     "flag-stale-listings": {

@@ -1,3 +1,5 @@
+import pytest
+from fastapi import FastAPI
 from httpx import AsyncClient
 
 from tests.test_tenants_platform_api import create_tenant
@@ -13,7 +15,28 @@ async def test_readyz_reports_dependencies(client: AsyncClient) -> None:
     resp = await client.get("/readyz")
     assert resp.status_code == 200, f"stack not ready: {resp.json()}"
     body = resp.json()
-    assert body == {"status": "ok", "database": "up", "redis": "up"}
+    # Broker + storage are reported but do not gate readiness (§14) — the API
+    # can serve every request without them.
+    assert body == {
+        "status": "ok",
+        "database": "up",
+        "redis": "up",
+        "broker": "up",
+        "storage": "up",
+    }
+
+
+async def test_readyz_stays_ready_when_storage_is_down(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An S3 outage degrades the media pipeline, not the API: pulling healthy
+    replicas out of the load balancer over it would be a self-inflicted outage."""
+    monkeypatch.setattr(app.state.storage, "bucket_reachable", lambda: False)
+    resp = await client.get("/readyz")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["storage"] == "down"
 
 
 async def test_request_id_header_echoed(client: AsyncClient) -> None:

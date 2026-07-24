@@ -64,6 +64,16 @@ class ObjectStorage:
             return f"{base}/{key}"
         return f"{self._settings.storage_endpoint_url.rstrip('/')}/{self.media_bucket}/{key}"
 
+    def bucket_reachable(self) -> bool:
+        """HEAD the media bucket — the cheapest liveness probe the S3 API
+        offers. Blocking network I/O, so async callers must run it in a thread
+        (``/readyz`` does). Never raises: a probe reports, it does not fail."""
+        try:
+            self._client.head_bucket(Bucket=self.media_bucket)
+        except Exception:
+            return False
+        return True
+
     # ---- object I/O (network — Celery task bodies only) ----
 
     def object_size(self, bucket: str, key: str) -> int:

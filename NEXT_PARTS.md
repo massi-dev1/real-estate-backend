@@ -1,4 +1,4 @@
-# Remaining Build Parts — Prompts
+﻿# Remaining Build Parts — Prompts
 
 Read this file before starting the next part. Do **only the next undone part** —
 check the **Build progress log** in `CLAUDE.md` to see which was last completed,
@@ -8,7 +8,8 @@ then paste that part's prompt below to Claude as-is (or lightly adapt).
 Parts 25–33 are the **production-hardening phases** that close the cross-cutting
 blueprint concerns deferred out of the module parts: §10 security, §11 caching,
 §13 test infra, §14 observability, §15 CI/CD, §16 deployment, §18 checklist.
-**Part 25 (deployment) is done.** The full plan lives at
+**Parts 25 (deployment), 26 (CI/CD) and 27 (observability) are done.**
+The full plan lives at
 `~/.claude/plans/okay-build-a-workflow-lucky-crayon.md`.
 
 **Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → **30 → 29** → 31 → 32 → 33.
@@ -28,54 +29,6 @@ log, then commit — code review and graph updates stay manual (done by the user
 
 ---
 
-## Part 26 — CI/CD pipeline (§15)
-
-Build the CI/CD pipeline. Add `.github/workflows/ci.yml` that, on push and PR,
-spins up service containers matching the local stack — `postgis/postgis:16`,
-`redis:7`, and `minio` (with a bucket-init step mirroring the `minio-init`
-service in `docker/docker-compose.yml`) — creates the `app_user` role by running
-`docker/initdb/01-app-role.sql` and the `realestate_test` DB (Redis db 1), then
-runs the exact gate CLAUDE.md documents locally: `uv sync` → `uv run ruff check`
-→ `uv run ruff format --check` → `uv run mypy` → `uv run pytest` → security scans
-`uv run pip-audit` and `uv run bandit -r src/app` (add `pip-audit` and `bandit`
-as dev deps; fix or scope-ignore any finding on the current tree so the job is
-green). Add an explicit **migration test** step/job: on a clean DB run
-`alembic upgrade head` then `alembic downgrade base` (the conftest already
-exercises downgrade→upgrade — make it explicit in CI per §15/§13). Add a second
-job that **builds `docker/Dockerfile`** to prove it builds (no registry push —
-no creds yet; document it as the promote-later seam). Add
-`.pre-commit-config.yaml` with ruff (lint+format) + mypy hooks for local dev.
-Validate the workflow YAML. Note in the log that the coverage `--cov` gate is
-added in Part 33 (pytest-cov lands there); until then CI runs pytest without the
-gate. Update the Build progress log and commit.
-
----
-
-## Part 27 — Observability: metrics, tracing, error tracking (§14)
-
-Add production telemetry, **all behind config flags so the app boots with no
-exporter credentials** (offline-safe, same stance as the AI/billing stubs). Add
-deps: a Prometheus instrumentator (`prometheus-fastapi-instrumentator` or
-`prometheus-client` + a small ASGI collector), `sentry-sdk[fastapi,celery,sqlalchemy]`,
-and OpenTelemetry (`opentelemetry-sdk` + `-instrumentation-fastapi`/`-sqlalchemy`/
-`-celery` + an OTLP exporter). New config fields: `sentry_dsn=""`,
-`sentry_traces_sample_rate`, `otel_enabled=False`, `otel_exporter_endpoint=""`,
-`metrics_enabled=True` (empty DSN / disabled flag = feature off). Add a
-**Prometheus `/metrics`** endpoint (request count/latency by route+status, plus
-custom gauges: DB pool saturation, Celery queue depth, cache hit-ratio, and the
-§14 **business metrics** leads/hour + notification-delivery rate) — guard it
-(internal-only / platform-key) so it isn't public. Wire **Sentry** init in
-`create_app` and in the Celery worker init, only when `sentry_dsn` is set, with
-release tagging from an env var, and ensure the existing `core/logging.py`
-PII-redaction runs before Sentry captures. Wire **OTEL** in `create_app` behind
-`otel_enabled` (instrument FastAPI + SQLAlchemy + Celery; propagate the existing
-`RequestContextMiddleware` `request_id` contextvar into spans). Extend `/readyz`
-with optional best-effort Celery-broker + storage checks (don't fail readiness on
-storage — document why). Tests: app boots with all flags off and the suite stays
-green; `/metrics` returns Prometheus text and increments on a request;
-Sentry/OTEL init is skipped when unconfigured. Update the log and commit.
-
----
 
 ## Part 28 — Edge security hardening (§10.1–§10.2)
 

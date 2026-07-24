@@ -12,8 +12,10 @@ from app.core.config import Settings, get_settings
 from app.core.database import create_engine, create_session_factory
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.metrics import MetricsMiddleware
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.core.storage import create_storage
+from app.core.telemetry import init_sentry, init_tracing, instrument_app
 from app.core.tenancy import TenantResolutionMiddleware
 from app.health import router as health_router
 from app.internal import router as internal_router
@@ -72,6 +74,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis=app.state.redis,
         cache_ttl_seconds=settings.tenant_cache_ttl_seconds,
     )
+    # OTEL instrumentation needs the live engine, so it happens here rather
+    # than in the factory; both calls no-op when tracing is off (§14).
+    instrument_app(app, app.state.engine, settings)
     logger.info("app_startup", env=settings.app_env)
     yield
     await app.state.engine.dispose()
@@ -128,6 +133,10 @@ def build_api_v1_router() -> APIRouter:
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings)
+    # Telemetry first: an exception during the rest of startup should already be
+    # captured. Both are no-ops without a DSN / with tracing disabled (§14).
+    init_sentry(settings, component="api")
+    init_tracing(settings)
 
     app = FastAPI(
         title=settings.app_name,
@@ -139,7 +148,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
 
     # Middleware executes in reverse add-order on requests:
-    # context → CORS → security headers → tenant resolution → routes.
+    # context → metrics → CORS → security headers → tenant resolution → routes.
+    # Metrics sits directly inside the context layer so its latency histogram
+    # covers everything the access log's duration_ms does (§14) — including a
+    # tenant-resolution 404, which is real user-visible latency.
     app.add_middleware(TenantResolutionMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     if settings.cors_origin_list:
@@ -150,6 +162,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    if settings.metrics_enabled:
+        app.add_middleware(MetricsMiddleware)
     app.add_middleware(RequestContextMiddleware)
 
     register_exception_handlers(app)

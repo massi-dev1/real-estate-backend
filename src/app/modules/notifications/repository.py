@@ -9,6 +9,7 @@ from datetime import datetime
 from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.metrics import record_notification_send
 from app.modules.notifications.models import (
     Notification,
     NotificationChannel,
@@ -192,6 +193,12 @@ class NotificationsRepository:
                 sent_at=sent_at,
             )
         )
+        # §14 delivery rate. Instrumented here rather than at the call sites
+        # because this is the single write point for the delivery log — every
+        # attempt, on every channel, passes through it. Counted per *attempt*
+        # (not post-commit): the metric answers "of the deliveries we tried,
+        # what fraction succeeded", so a retried send legitimately counts twice.
+        record_notification_send(channel.value, status.value)
 
     # ---- digest queue ----
 
