@@ -29,6 +29,7 @@ from uuid_utils.compat import uuid7
 
 from app.core.config import Settings
 from app.core.database import SessionDep, on_commit
+from app.core.events import EVENT_DEAL_CLOSED, emit_event
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.core.pagination import InvalidCursorError, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import AuthenticatedUser, Role
@@ -271,6 +272,21 @@ class TransactionsService:
         if target in CLOSED_STATUSES:
             deal.closed_at = datetime.now(UTC)
             deal.lost_reason = data.lost_reason if target is DealStatus.CLOSED_LOST else None
+            # Durable ``deal.closed`` domain event (§12) for outbound-webhook
+            # fan-out — a tenant can drive downstream automation off a closed
+            # deal. Written in this transaction so it can never be lost. Commission
+            # figures are deliberately omitted from the payload (they are admin-
+            # gated on the API; a webhook must not become a side channel for them).
+            emit_event(
+                self.repo.session,
+                tenant,
+                EVENT_DEAL_CLOSED,
+                {
+                    "dealId": str(deal.id),
+                    "outcome": target.value,
+                    "title": deal.title,
+                },
+            )
         else:
             # Relisting an accidentally-closed deal clears the close stamps.
             deal.closed_at = None

@@ -21,7 +21,7 @@ from app.modules.notifications.service import build_notifications_boundary, user
 from app.workers.tasks.leads import sweep_drips_and_escalations
 from app.workers.tasks.notifications import send_notification_digests
 from tests.helpers import HOST_B
-from tests.test_leads import age_lead, capture, capture_body, mailpit_count
+from tests.test_leads import age_lead, capture, capture_body, mailpit_count, run_outbox_relay
 from tests.test_listings import add_user, tenant_and_login
 from tests.test_tenants_platform_api import create_tenant
 
@@ -415,6 +415,10 @@ async def test_lead_assignment_notifies_agent_via_notify(
     resp = await capture(client, capture_body(email="speedlead@example.com", source="phone"))
     assert resp.status_code == 201, resp.text
     lead_id = resp.json()["id"]
+
+    # Speed-to-lead is a durable lead.created outbox event now (Part 31): the
+    # capture stages it, the relay delivers the notify(). Drain before asserting.
+    run_outbox_relay()
 
     notes = (await client.get(ME_NOTIFICATIONS, headers=agent)).json()["items"]
     assigned = [n for n in notes if n["type"] == "lead_assigned"]

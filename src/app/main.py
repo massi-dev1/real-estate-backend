@@ -66,6 +66,7 @@ from app.modules.tenants.service import DomainTenantResolver
 from app.modules.transactions.router import portal_router as transactions_portal_router
 from app.modules.users.router import staff_router, users_router
 from app.modules.valuations.router import public_router as valuations_public_router
+from app.modules.webhooks.router import portal_router as webhooks_portal_router
 
 logger = structlog.get_logger(__name__)
 
@@ -138,6 +139,7 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(transactions_portal_router)
     router.include_router(syndication_feeds_router)
     router.include_router(syndication_portal_router)
+    router.include_router(webhooks_portal_router)
     router.include_router(analytics_public_router)
     router.include_router(analytics_portal_router)
     router.include_router(analytics_listing_report_router)

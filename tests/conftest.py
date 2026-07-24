@@ -28,6 +28,11 @@ os.environ["STORAGE_DOCS_BUCKET"] = "media-private-test"
 # monkeypatch the transport. Leaving it on would add a network round trip to
 # every register/reset in the suite — and make it fail offline.
 os.environ["HIBP_ENABLED"] = "false"
+# Outbound-webhook tests deliver to a mock on 127.0.0.1, which the SSRF guard
+# (§10.4) would otherwise correctly refuse. Open the private-host escape hatch
+# for the suite; the guard's *rejection* behaviour is tested directly against
+# validate_public_url with the flag off.
+os.environ["WEBHOOK_ALLOW_PRIVATE_HOSTS"] = "true"
 
 import subprocess
 import sys

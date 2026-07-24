@@ -24,8 +24,10 @@ from urllib.parse import quote
 
 import structlog
 from fastapi import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import SessionDep, on_commit
+from app.core.events import EVENT_LEAD_CREATED, emit_event, register_handler
 from app.core.exceptions import ConflictError, NotFoundError, PermissionDeniedError
 from app.core.i18n import DEFAULT_LOCALE, pick_localized
 from app.core.metrics import record_lead_created
@@ -66,10 +68,7 @@ from app.modules.leads.schemas import (
 )
 from app.modules.listings.service import ListingService, get_listing_service
 from app.modules.notifications.models import NotificationType
-from app.modules.notifications.service import (
-    NotificationsService,
-    build_notifications_boundary,
-)
+from app.modules.notifications.service import build_notifications_boundary
 from app.modules.users.service import UserService, get_user_service
 from app.workers.tasks.email import send_email
 
@@ -146,7 +145,6 @@ class LeadsService:
         users: UserService,
         listings: ListingService,
         agents: AgentsService,
-        notifications: NotificationsService | None = None,
         scorer: LeadScorer | None = None,
     ) -> None:
         self.repo = repo
@@ -156,17 +154,10 @@ class LeadsService:
         # The active lead scorer (§8.18 seam). Rules-based today; a model-based
         # scorer swaps in here with no call-site change.
         self.scorer = scorer or build_lead_scorer()
-        # Built lazily from the same session when not injected (workers pass
-        # nothing; the request factory injects a redis-backed one for live WS
-        # push). A single session-scoped instance so all its ``on_commit``
-        # side effects register on the request's session.
-        self._notifications = notifications
-
-    @property
-    def notifications(self) -> NotificationsService:
-        if self._notifications is None:
-            self._notifications = build_notifications_boundary(self.repo.session)
-        return self._notifications
+        # Speed-to-lead notification is no longer a member of this service: it is
+        # a durable ``lead.created`` outbox event (§12), consumed by
+        # ``_handle_lead_created`` in the relay, which builds its own
+        # notifications boundary. See ``_create_captured_lead``.
 
     # ---- scoping helpers ----
 
@@ -531,21 +522,24 @@ class LeadsService:
         await self.repo.flush()
 
         lead_id: uuid.UUID = lead.id
-        if agent_id is not None:
-            identity = await self.users.get_identity_if_active(tenant.id, agent_id)
-            if identity is not None:
-                # Speed-to-lead (§8.4) now routes through the notifications
-                # module (Part 18): an in-app row for the agent + their enabled
-                # external channels (email by default), rendered in the agent's
-                # locale. notify() registers its own post-commit side effects, so
-                # nothing fires before the lead row is visible.
-                await self.notifications.notify(
-                    tenant,
-                    user_id=agent_id,
-                    type=NotificationType.LEAD_ASSIGNED,
-                    payload={"leadId": str(lead_id), "email": identity.email},
-                    locale=identity.locale,
-                )
+        # Speed-to-lead (§8.4) is now a **transactional-outbox** event (§12), not
+        # a post-commit hook. The event row commits atomically with the lead, so
+        # a broker/worker hiccup between commit and enqueue can no longer drop the
+        # agent's notification — the relay picks it up on its next tick. The same
+        # ``lead.created`` event also drives outbound-webhook fan-out
+        # (``modules/webhooks``), so both consumers share one durable event.
+        emit_event(
+            self.repo.session,
+            tenant,
+            EVENT_LEAD_CREATED,
+            {
+                "leadId": str(lead_id),
+                "contactId": str(contact.id),
+                "agentId": str(agent_id) if agent_id is not None else None,
+                "source": source.value,
+                "listingId": str(listing_id) if listing_id is not None else None,
+            },
+        )
         self._count_lead_created(source)
         return lead
 
@@ -1134,6 +1128,39 @@ def _decode_keyset(cursor: str) -> tuple[datetime, uuid.UUID]:
         return datetime.fromisoformat(values["created_at"]), uuid.UUID(values["id"])
     except (KeyError, TypeError, ValueError) as exc:
         raise InvalidCursorError("The provided cursor is malformed.") from exc
+
+
+async def _handle_lead_created(
+    session: AsyncSession, tenant: TenantContext, _event_type: str, payload: dict[str, Any]
+) -> None:
+    """Outbox handler for ``lead.created`` (§12): the durable speed-to-lead
+    notification (§8.4). Runs inside the relay's tenant-scoped transaction; it
+    re-resolves the assigned agent (the account may have been disabled since
+    capture) and, if still active, notifies them. Idempotent by construction —
+    ``notify()`` writes one in-app row and, at-least-once, a duplicate relay run
+    would send a second speed-to-lead email, an acceptable over-delivery for a
+    "call this lead now" nudge (the same at-least-once contract every outbox
+    handler lives under). No agent → nothing to do (an unassigned lead's
+    escalation sweep covers it)."""
+    agent_raw = payload.get("agentId")
+    if not agent_raw:
+        return
+    agent_id = uuid.UUID(str(agent_raw))
+    users = get_user_service(session)
+    identity = await users.get_identity_if_active(tenant.id, agent_id)
+    if identity is None:
+        return
+    notifications = build_notifications_boundary(session)
+    await notifications.notify(
+        tenant,
+        user_id=agent_id,
+        type=NotificationType.LEAD_ASSIGNED,
+        payload={"leadId": str(payload.get("leadId")), "email": identity.email},
+        locale=identity.locale,
+    )
+
+
+register_handler(EVENT_LEAD_CREATED, _handle_lead_created)
 
 
 def get_leads_service(session: SessionDep) -> LeadsService:

@@ -88,6 +88,17 @@ async def mailpit_count(to: str, subject_word: str) -> int:
         return len(resp.json()["messages"])
 
 
+def run_outbox_relay() -> dict[str, int]:
+    """Drain the transactional outbox (§12, Part 31) via the eager relay task.
+
+    Speed-to-lead is a durable ``lead.created`` outbox event now, not an inline
+    send: a capture only *stages* the event, and the relay tick delivers it. Any
+    test asserting the assignment notification arrived must drain first."""
+    from app.workers.tasks.outbox import relay_outbox
+
+    return relay_outbox()
+
+
 # ---- capture & spam defense ----
 
 
@@ -247,9 +258,12 @@ async def test_listing_agent_strategy_assigns_from_listing(
     assert resp.status_code == 201, resp.text
     lead = await client.get(f"{PORTAL_LEADS}/{resp.json()['id']}", headers=admin)
     assert lead.json()["agentId"] == agent_id
-    # Speed-to-lead: the assignment notification reached the agent's inbox.
-    # It now flows through the notifications module (Part 18) and renders in the
-    # agent's locale (fr default) — "prospect" is in the fr lead_assigned subject.
+    # Speed-to-lead: the assignment notification reaches the agent's inbox once
+    # the outbox relay drains the durable lead.created event (Part 31 — the
+    # notification is no longer an inline send). It flows through the
+    # notifications module (Part 18), rendered in the agent's locale (fr default)
+    # — "prospect" is in the fr lead_assigned subject.
+    run_outbox_relay()
     assert await mailpit_count("agent1@a.example.com", "prospect") >= 1
 
 

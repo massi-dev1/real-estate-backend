@@ -9,13 +9,14 @@ Parts 25–33 are the **production-hardening phases** that close the cross-cutti
 blueprint concerns deferred out of the module parts: §10 security, §11 caching,
 §13 test infra, §14 observability, §15 CI/CD, §16 deployment, §18 checklist.
 **Parts 25 (deployment), 26 (CI/CD), 27 (observability), 28 (edge security),
-30 (data-protection primitives) and 29 (auth hardening) are done.**
+30 (data-protection primitives), 29 (auth hardening) and 31 (outbox + outbound
+webhooks) are done.**
 The full plan lives at
 `~/.claude/plans/okay-build-a-workflow-lucky-crayon.md`.
 
-**Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → 30 → 29 → **31** → 32 → 33.
+**Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → 30 → 29 → 31 → **32** → 33.
 (Part 30's crypto helper `core/crypto.py`'s `EncryptedString` field-encrypts the
-Part 29 MFA secret. Next undone: **Part 31 — outbox + outbound webhooks**.)
+Part 29 MFA secret. Next undone: **Part 32 — caching & performance (§11)**.)
 
 General rules that apply to every part (already in `CLAUDE.md`, repeated here so
 they're not missed): one part at a time; query `graphify-out/` before searching
@@ -31,32 +32,7 @@ log, then commit — code review and graph updates stay manual (done by the user
 
 ---
 
-## Part 29 — Auth hardening: lockout, MFA, breach-check, OAuth seam (§7.1, §10.3)
 
-Add the auth differentiators (extends `modules/auth` + `modules/users`; depends
-on Part 30's `core/crypto.py`). **Account lockout / backoff** (§7.1): Redis
-per-account + per-IP failed-attempt counters with exponential backoff after 5
-failures, resetting on success — the 401 stays generic (no enumeration); fits
-`AuthService.login`. **Breached-password check** (§10.3): HIBP k-anonymity range
-API via `httpx` on register + password-change, rejecting known-breached passwords
-with a clear 422, **fail-open** on an HIBP outage (never block signup on a
-third-party being down — document it). **MFA/TOTP** (§7.1): the `users.mfa_secret`
-column already exists (reserved); add `pyotp`, an enroll (QR provisioning URI) →
-verify → **enforce for admin/agent/team_lead at login** flow (a second-factor
-step returning a short-lived MFA-pending token), and **field-encrypt the TOTP
-secret at rest** using Part 30's `EncryptedString`. Migration for any new columns
-(e.g. `mfa_enabled`). **OAuth social login — seam only** (§7.1):
-`integrations/auth_oauth/` with a provider protocol + a Google adapter via
-`authlib`, constructed only when `oauth_google_client_id`/`_secret` are set
-(offline-safe default; without creds the routes return a clear "not configured" —
-flips on when creds arrive). **Session-list endpoint** (§10.3): `GET /me/sessions`
-+ `DELETE /me/sessions/{id}` ("log out other devices") over the existing
-`auth_sessions` table. Tests: lockout after 5 fails + unlock on backoff expiry;
-breached password rejected (mock HIBP); TOTP enroll→verify→enforced-login
-round-trip + encrypted-secret-unreadable-in-DB; OAuth routes "not configured"
-without creds; session list + revoke. Update the log and commit.
-
----
 
 ## Part 31 — Transactional outbox + outbound webhooks (§12, §8.14, §10.9)
 

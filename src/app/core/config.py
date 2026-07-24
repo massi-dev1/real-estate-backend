@@ -192,6 +192,16 @@ class Settings(BaseSettings):
     oauth_google_client_secret: str = ""
     oauth_redirect_base_url: str = ""
 
+    # Outbound webhooks + SSRF guard (§8.14, §10.4). A tenant-registered webhook
+    # target must resolve to a *public* address, so the guard blocks
+    # private/loopback/link-local ranges (metadata service, internal admin
+    # ports, RFC-1918 hosts) at registration and again on every delivery hop
+    # (DNS rebinding / redirect-to-private). ``webhook_allow_private_hosts`` is
+    # the single escape hatch — default **off** (secure), flipped on only for
+    # tests/local dev delivering to a mock on 127.0.0.1 (same offline-safe
+    # stance as the portal/billing stubs).
+    webhook_allow_private_hosts: bool = False
+
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".
     problem_type_base: str = "https://api.realestate.example/errors/"
 

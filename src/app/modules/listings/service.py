@@ -20,6 +20,7 @@ from sqlalchemy import Row
 from app.common.geo import LonLat, point_lonlat, to_point
 from app.core.config import get_settings
 from app.core.database import SessionDep, on_commit
+from app.core.events import EVENT_LISTING_PUBLISHED, emit_event
 from app.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -432,6 +433,21 @@ class ListingService:
                 reference_code=listing.reference_code,
             )
             tenant_id, listing_id_val = tenant.id, listing.id
+
+            # Durable ``listing.published`` domain event (§12) for outbound
+            # webhook fan-out — written in this transaction so a subscriber is
+            # never silently missed. (Saved-search alerts stay a post-commit
+            # enqueue below: a missed instant-alert is lower-criticality than a
+            # missed integration event a tenant built automation on.)
+            emit_event(
+                self.repo.session,
+                tenant,
+                EVENT_LISTING_PUBLISHED,
+                {
+                    "listingId": str(listing_id_val),
+                    "referenceCode": listing.reference_code,
+                },
+            )
 
             async def _enqueue_alerts() -> None:
                 # Instant saved-search alerts (§8.9), post-commit so the

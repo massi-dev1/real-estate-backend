@@ -74,6 +74,11 @@ class Permission(enum.StrEnum):
     # marketer has no reason to see a back-office deal. Commission *figures* are
     # gated tighter still (admin-only) in the service, a field-level gate on top
     # of this resource permission rather than a separate permission.
+    WEBHOOK_MANAGE = "webhook:manage"  # register/edit outbound webhook endpoints +
+    # read the delivery log (§8.14/§10.9). An integration/admin concern — granted
+    # to admin only, like COMPLIANCE_MANAGE. A webhook endpoint is a tenant-wide
+    # data egress (every subscribed domain event is POSTed to it), so it is not a
+    # per-agent or team-lead concern.
     # Platform back-office.
     PLATFORM_TENANT_VIEW = "platform:tenant:view"
     PLATFORM_TENANT_MANAGE = "platform:tenant:manage"
@@ -135,6 +140,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.DEAL_MANAGE,
             Permission.ANALYTICS_VIEW,
             Permission.COMPLIANCE_MANAGE,
+            Permission.WEBHOOK_MANAGE,
         }
     ),
     Role.PLATFORM_SUPPORT: frozenset({Permission.PLATFORM_TENANT_VIEW}),

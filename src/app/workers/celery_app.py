@@ -67,6 +67,13 @@ celery_app.conf.update(
         # Compliance retention & DSR sweeps (§8.17): erasure purge + lost-lead
         # anonymization — batch back-office, same class as the retention jobs.
         "app.workers.tasks.compliance.*": {"queue": "analytics"},
+        # Outbox relay (§12): drains durable domain events to their handlers. On
+        # `default` — it drives the human-facing speed-to-lead notification, the
+        # same class as email.*, never starved behind batch work.
+        "app.workers.tasks.outbox.*": {"queue": "default"},
+        # Outbound webhook delivery (§8.14): external I/O to tenant-registered
+        # receivers — the same profile as portal syndication (`sync` queue).
+        "app.workers.tasks.webhooks.*": {"queue": "sync"},
     },
     task_serializer="json",
     accept_content=["json"],
@@ -196,5 +203,14 @@ celery_app.conf.beat_schedule = {
     "anonymize-stale-lost-leads": {
         "task": "app.workers.tasks.compliance.anonymize_stale_lost_leads",
         "schedule": crontab(day_of_week=1, hour=6, minute=30),
+    },
+    # Transactional-outbox relay (§12): drains durable domain events (speed-to-
+    # lead, webhook fan-out) to their handlers with at-least-once + backoff.
+    # Every minute — the outbox is the reliability floor under a broker hiccup,
+    # so it must reconcile quickly; each event's status filter makes the tick
+    # idempotent (a delivered row is never re-drained).
+    "relay-outbox": {
+        "task": "app.workers.tasks.outbox.relay_outbox",
+        "schedule": crontab(minute="*"),
     },
 }

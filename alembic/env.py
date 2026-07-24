@@ -31,9 +31,11 @@ import app.modules.syndication.models
 import app.modules.tenants.models
 import app.modules.transactions.models
 import app.modules.users.models
-import app.modules.valuations.models  # noqa: F401
+import app.modules.valuations.models
+import app.modules.webhooks.models  # noqa: F401
 from app.core.config import get_settings
 from app.core.database import Base
+from app.core.events import OutboxEvent  # noqa: F401  # core-owned outbox table
 
 config = context.config
 

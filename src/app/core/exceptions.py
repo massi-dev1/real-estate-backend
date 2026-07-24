@@ -123,6 +123,16 @@ class InvalidWebhookError(AppError):
     title = "Invalid Webhook"
 
 
+class InvalidWebhookUrlError(AppError):
+    """A tenant-registered outbound webhook target URL failed SSRF validation
+    (§10.4): non-http(s), unresolvable, or resolving to a private/loopback/
+    link-local address. 422 — a bad request the admin can correct."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    slug = "invalid-webhook-url"
+    title = "Invalid Webhook URL"
+
+
 class IdempotencyConflictError(AppError):
     """The same ``Idempotency-Key`` is already in flight for this request
     (§9) — a concurrent duplicate, not a replay (a replay returns the cached
