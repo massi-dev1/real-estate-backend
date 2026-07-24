@@ -115,7 +115,24 @@ class Settings(BaseSettings):
     metrics_enabled: bool = True
     metrics_auth_token: str = ""
 
+    # Additive platform/admin allowlist on top of the dynamic per-tenant
+    # allowlist built from `tenant_domains` (§10.1) — the back-office SPA and
+    # local dev frontends live here, agency sites resolve themselves.
     cors_origins: str = ""
+
+    # Edge hardening (§10.1). HSTS is only meaningful over TLS, so it is sent in
+    # staging/production (where Caddy terminates TLS) or on a request that
+    # arrived over https — never on plain-http local dev, where a cached
+    # max-age would make localhost unreachable over http for a year.
+    hsts_max_age_seconds: int = 31_536_000  # 1 year
+    hsts_include_subdomains: bool = True
+
+    # Layered rate limits (§10.2). The global per-IP budget is a coarse
+    # backstop in front of everything; per-endpoint auth limits are much
+    # tighter. Both degrade open when Redis is unavailable.
+    global_rate_limit_enabled: bool = True
+    global_rate_limit_per_minute: int = 300
+    auth_rate_limit_per_minute: int = 10
 
     # RFC 9457 problem `type` values are built as f"{problem_type_base}{slug}".
     problem_type_base: str = "https://api.realestate.example/errors/"

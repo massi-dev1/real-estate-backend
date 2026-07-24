@@ -76,6 +76,13 @@ class TenantSuspendedError(AppError):
 
 
 class RateLimitedError(AppError):
+    """A rate limit was exceeded (§10.2).
+
+    A ``retry_after`` kwarg is promoted to the ``Retry-After`` response header
+    by the handler as well as appearing in the problem body, so a client that
+    only understands the standard header still backs off correctly.
+    """
+
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     slug = "rate-limited"
     title = "Too Many Requests"
@@ -131,6 +138,12 @@ def problem_response(
 
 async def _app_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, AppError)
+    headers: dict[str, str] | None = None
+    # `retry_after` is a body field *and* the standard header (§10.2): a client
+    # that understands only `Retry-After` must still be told when to come back.
+    retry_after = exc.extra.get("retry_after")
+    if isinstance(retry_after, int):
+        headers = {"Retry-After": str(retry_after)}
     return problem_response(
         request,
         status_code=exc.status_code,
@@ -138,6 +151,7 @@ async def _app_error_handler(request: Request, exc: Exception) -> JSONResponse:
         title=exc.title,
         detail=exc.detail,
         extra=exc.extra,
+        headers=headers,
     )
 
 

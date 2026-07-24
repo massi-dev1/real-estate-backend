@@ -10,10 +10,11 @@ The access JWT travels in the response body; the refresh token only ever in an
 never sent to non-auth endpoints.
 """
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.permissions import CurrentUserDep
+from app.core.rate_limit import auth_rate_limit
 from app.core.tenancy import TenantDep
 from app.modules.auth.schemas import (
     AcceptedOut,
@@ -64,8 +65,21 @@ def _token_response(
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Per-endpoint limits on the credential-handling routes (§10.2). The budget is
+# read once at import — these are process-lifetime route definitions, and the
+# knob is a deploy-time setting, not something toggled on a live app.
+_AUTH_LIMIT = get_settings().auth_rate_limit_per_minute
+_login_limit = Depends(auth_rate_limit("login", _AUTH_LIMIT))
+_register_limit = Depends(auth_rate_limit("register", _AUTH_LIMIT))
+# Refresh is a legitimate every-15-minutes call for an active session and may
+# be issued by several tabs at once, so it gets a roomier budget than login.
+_refresh_limit = Depends(auth_rate_limit("refresh", _AUTH_LIMIT * 3))
+# Password reset mails a third party, so a tight budget also protects the
+# inbox of whoever's address is being submitted.
+_reset_limit = Depends(auth_rate_limit("password-reset", _AUTH_LIMIT))
 
-@auth_router.post("/register", status_code=status.HTTP_201_CREATED)
+
+@auth_router.post("/register", status_code=status.HTTP_201_CREATED, dependencies=[_register_limit])
 async def register(
     data: RegisterRequest,
     tenant: TenantDep,
@@ -77,7 +91,7 @@ async def register(
     return _token_response(issued, request, response, cookie_path=TENANT_AUTH_PATH)
 
 
-@auth_router.post("/login")
+@auth_router.post("/login", dependencies=[_login_limit])
 async def login(
     data: LoginRequest,
     tenant: TenantDep,
@@ -89,7 +103,7 @@ async def login(
     return _token_response(issued, request, response, cookie_path=TENANT_AUTH_PATH)
 
 
-@auth_router.post("/refresh")
+@auth_router.post("/refresh", dependencies=[_refresh_limit])
 async def refresh(
     tenant: TenantDep, service: AuthServiceDep, request: Request, response: Response
 ) -> TokenOut:
@@ -113,7 +127,9 @@ async def logout_all(user: CurrentUserDep, service: AuthServiceDep, response: Re
     _clear_refresh_cookie(response, cookie_path=TENANT_AUTH_PATH)
 
 
-@auth_router.post("/password/forgot", status_code=status.HTTP_202_ACCEPTED)
+@auth_router.post(
+    "/password/forgot", status_code=status.HTTP_202_ACCEPTED, dependencies=[_reset_limit]
+)
 async def forgot_password(
     data: ForgotPasswordRequest, tenant: TenantDep, service: AuthServiceDep
 ) -> AcceptedOut:
@@ -121,7 +137,9 @@ async def forgot_password(
     return AcceptedOut(detail="If an account exists for this email, a reset code has been sent.")
 
 
-@auth_router.post("/password/reset", status_code=status.HTTP_204_NO_CONTENT)
+@auth_router.post(
+    "/password/reset", status_code=status.HTTP_204_NO_CONTENT, dependencies=[_reset_limit]
+)
 async def reset_password(
     data: ResetPasswordRequest, tenant: TenantDep, service: AuthServiceDep
 ) -> None:
@@ -142,6 +160,11 @@ async def verify_email(
 
 
 platform_auth_router = APIRouter(prefix="/platform/auth", tags=["platform:auth"])
+# No per-endpoint limit here: this router is tenant-exempt, and every limit in
+# `core.rate_limit` is keyed on tenant + IP. Platform staff login is covered by
+# the global per-IP budget; a tenant-free auth limit would need its own key
+# scheme, which is worth adding alongside Part 29's account lockout rather than
+# inventing a second keying convention now.
 
 
 @platform_auth_router.post("/login")

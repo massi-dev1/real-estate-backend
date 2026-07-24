@@ -28,8 +28,12 @@ https:// {
 
 	encode zstd gzip
 
-	# Defense-in-depth: the app already sets these, but the edge enforces HSTS
-	# (only meaningful over TLS, which terminates here).
+	# Defense-in-depth: as of Part 28 the app sets HSTS itself (whenever
+	# APP_ENV is staging/production or the request arrived over https), and
+	# `header` *replaces* rather than appends, so this is one value not two.
+	# Keeping it at the edge means HSTS survives an app misconfiguration, and
+	# vice versa — TLS terminates here, so this is where it is guaranteed
+	# meaningful. Keep the max-age in sync with HSTS_MAX_AGE_SECONDS.
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		-Server

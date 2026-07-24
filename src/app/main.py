@@ -5,15 +5,16 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import APIRouter, FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from redis.asyncio import Redis
 
 from app.core.config import Settings, get_settings
+from app.core.cors import TenantCORSMiddleware
 from app.core.database import create_engine, create_session_factory
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.metrics import MetricsMiddleware
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from app.core.rate_limit import GlobalRateLimitMiddleware
 from app.core.storage import create_storage
 from app.core.telemetry import init_sentry, init_tracing, instrument_app
 from app.core.tenancy import TenantResolutionMiddleware
@@ -154,21 +155,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
 
-    # Middleware executes in reverse add-order on requests:
-    # context → metrics → CORS → security headers → tenant resolution → routes.
+    # Middleware executes in reverse add-order on requests: context → metrics
+    # → global rate limit → CORS → security headers → tenant resolution →
+    # routes.
+    #
     # Metrics sits directly inside the context layer so its latency histogram
     # covers everything the access log's duration_ms does (§14) — including a
     # tenant-resolution 404, which is real user-visible latency.
+    #
+    # The global limiter sits above CORS and tenant resolution so a flood
+    # costs one Redis lookup rather than a tenant lookup plus routing; CORS in
+    # turn sits above tenant resolution because a preflight carries no
+    # credentials and must be answerable for a host the resolver would reject.
+    # Security headers wrap the tenant layer so a 404/402 problem response
+    # carries them too.
     app.add_middleware(TenantResolutionMiddleware)
-    app.add_middleware(SecurityHeadersMiddleware)
-    if settings.cors_origin_list:
-        app.add_middleware(
-            CORSMiddleware,
-            allow_origins=settings.cors_origin_list,
-            allow_credentials=True,
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
+    app.add_middleware(SecurityHeadersMiddleware, settings=settings)
+    app.add_middleware(TenantCORSMiddleware, settings=settings)
+    if settings.global_rate_limit_enabled:
+        app.add_middleware(GlobalRateLimitMiddleware, settings=settings)
     # Read once, at construction: the middleware stack is fixed for the app's
     # lifetime, so toggling `metrics_enabled` on a live app only closes the
     # scrape endpoint (which re-reads it per request) — collection keeps
