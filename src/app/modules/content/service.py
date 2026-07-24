@@ -305,9 +305,7 @@ class ContentService:
             raise ConflictError("A guide with this slug already exists.") from exc
         return guide
 
-    async def publish_guide(
-        self, tenant: TenantContext, guide_id: uuid.UUID
-    ) -> NeighborhoodGuide:
+    async def publish_guide(self, tenant: TenantContext, guide_id: uuid.UUID) -> NeighborhoodGuide:
         guide = await self.get_guide(tenant, guide_id)
         if guide.status != PageStatus.PUBLISHED:
             guide.status = PageStatus.PUBLISHED
@@ -441,9 +439,7 @@ class ContentService:
             on_commit(self.repo.session, _enqueue)
         return report
 
-    async def unpublish_report(
-        self, tenant: TenantContext, report_id: uuid.UUID
-    ) -> MarketReport:
+    async def unpublish_report(self, tenant: TenantContext, report_id: uuid.UUID) -> MarketReport:
         report = await self.get_report(tenant, report_id)
         if report.status != ReportStatus.DRAFT:
             report.status = ReportStatus.DRAFT

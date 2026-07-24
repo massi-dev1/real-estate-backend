@@ -31,9 +31,7 @@ def click_body(**overrides: Any) -> dict[str, Any]:
     }
 
 
-async def click(
-    client: AsyncClient, body: dict[str, Any], *, host: str = HOST_A
-) -> httpx.Response:
+async def click(client: AsyncClient, body: dict[str, Any], *, host: str = HOST_A) -> httpx.Response:
     return await client.post(CLICK_URL, json=body, headers={"Host": host})
 
 
@@ -53,9 +51,7 @@ async def test_click_uses_listing_agents_number_and_creates_lead(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="wa-agent@a.example.com"
     )
@@ -85,9 +81,7 @@ async def test_click_falls_back_to_tenant_number(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     # Free-form JSONB settings: punctuation must be stripped, not rejected.
     await set_tenant_whatsapp(client, platform_headers, str(tenant["id"]), "+213 555 00 11 22")
 
@@ -118,9 +112,7 @@ async def test_click_honeypot_returns_normal_response_but_persists_nothing(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     await set_tenant_whatsapp(client, platform_headers, str(tenant["id"]), "+213770000000")
 
     resp = await click(client, click_body(hp="gotcha"))
@@ -139,9 +131,7 @@ async def test_click_honeypot_bypasses_listing_lookup(
     """A honeypot hit must short-circuit before any listing/number
     resolution — otherwise a bogus listing_id gives a bot a distinguishable
     404, defeating the camouflage."""
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     await set_tenant_whatsapp(client, platform_headers, str(tenant["id"]), "+213770000000")
 
     resp = await click(

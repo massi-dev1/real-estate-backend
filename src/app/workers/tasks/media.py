@@ -88,9 +88,7 @@ def process_media(media_id: str, tenant_id: str) -> str:
         blur: str | None = None
         if content_type != "application/pdf":
             key_prefix = f"tenants/{tenant_id}/listings/{listing_id}/{media_id}"
-            variants, blur = derive_variants(
-                original, key_prefix, storage, widths=VARIANT_WIDTHS
-            )
+            variants, blur = derive_variants(original, key_prefix, storage, widths=VARIANT_WIDTHS)
     except MediaValidationError as exc:
         reason = str(exc)
         storage.delete_objects(storage.docs_bucket, [storage_key])

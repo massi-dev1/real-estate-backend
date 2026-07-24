@@ -111,7 +111,7 @@ class MortgageEstimateOut(OutSchema):
 
 
 class MortgageEmailCreate(MortgageEstimateIn, _CaptureBase):
-    """"Email me this estimate" — the calculator inputs plus the shared
+    """ "Email me this estimate" — the calculator inputs plus the shared
     capture shape; the recipient address is the contact's email."""
 
     @model_validator(mode="after")

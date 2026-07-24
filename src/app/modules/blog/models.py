@@ -43,9 +43,7 @@ def _str_enum(enum_cls: type[enum.StrEnum], name: str, length: int = 30) -> Enum
 
 class BlogCategory(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "blog_categories"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "slug", name="uq_blog_categories_tenant_slug"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "slug", name="uq_blog_categories_tenant_slug"),)
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
@@ -77,9 +75,7 @@ class BlogPost(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     excerpt: Mapped[dict[str, Any] | None] = mapped_column()
     body: Mapped[dict[str, Any]] = mapped_column()
     # Explicit JSONB: the type registry maps dict[str, Any] but not list[...].
-    tags: Mapped[list[str]] = mapped_column(
-        JSONB, default=list, server_default=text("'[]'::jsonb")
-    )
+    tags: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"))
     cover_image: Mapped[str | None] = mapped_column(String(500))
     # {title: {i18n}, description: {i18n}, og_image: url} — same shape as pages.
     seo_meta: Mapped[dict[str, Any]] = mapped_column(

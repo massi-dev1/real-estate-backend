@@ -123,9 +123,7 @@ async def test_generate_description_requires_listing_manage(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     listing = await make_listing(client, admin)
     # A buyer-tier account (no LISTING_MANAGE) is forbidden.
     from tests.conftest import FIXTURE_PASSWORD
@@ -157,9 +155,7 @@ async def test_generate_description_provider_failure_is_503(
         def key(self) -> str:
             return "failing"
 
-        async def generate_text(
-            self, request: TextGenerationRequest
-        ) -> TextGenerationResult:
+        async def generate_text(self, request: TextGenerationRequest) -> TextGenerationResult:
             raise AIError("boom", permanent=False)
 
     # Patch where the listings service resolves the provider.

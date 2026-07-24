@@ -73,9 +73,7 @@ class BillingService:
 
     # ---- webhook (§10.9) ----
 
-    async def handle_webhook(
-        self, *, payload: bytes, signature: str
-    ) -> tuple[bool, bool]:
+    async def handle_webhook(self, *, payload: bytes, signature: str) -> tuple[bool, bool]:
         """Verify → idempotency-guard → dispatch. Returns
         ``(received, processed)``. Raises :class:`WebhookVerificationError` for a
         bad/stale signature (the router maps it to 400). A duplicate or unknown

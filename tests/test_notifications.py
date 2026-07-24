@@ -118,7 +118,10 @@ async def test_unread_count_and_mark_read(
     uid = await _user_id(client, agent)
     for _ in range(3):
         await _notify_direct(
-            app, tenant, user_id=uid, type=NotificationType.LEAD_ASSIGNED,
+            app,
+            tenant,
+            user_id=uid,
+            type=NotificationType.LEAD_ASSIGNED,
             payload={"leadId": str(uuid.uuid4())},
         )
 
@@ -127,18 +130,14 @@ async def test_unread_count_and_mark_read(
 
     items = (await client.get(ME_NOTIFICATIONS, headers=agent)).json()["items"]
     one = items[0]["id"]
-    resp = await client.post(
-        f"{ME_NOTIFICATIONS}/mark-read", json={"ids": [one]}, headers=agent
-    )
+    resp = await client.post(f"{ME_NOTIFICATIONS}/mark-read", json={"ids": [one]}, headers=agent)
     assert resp.status_code == 204
     assert (await client.get(f"{ME_NOTIFICATIONS}/unread-count", headers=agent)).json()[
         "unread"
     ] == 2
 
     # unreadOnly filter drops the one just read.
-    unread = await client.get(
-        ME_NOTIFICATIONS, headers=agent, params={"unreadOnly": True}
-    )
+    unread = await client.get(ME_NOTIFICATIONS, headers=agent, params={"unreadOnly": True})
     assert len(unread.json()["items"]) == 2
 
     # Mark all read.
@@ -189,7 +188,10 @@ async def test_preferences_default_and_suppress_email(
 
     before = await mailpit_count("pref@a.example.com", "lead")
     await _notify_direct(
-        app, tenant, user_id=uid, type=NotificationType.LEAD_ASSIGNED,
+        app,
+        tenant,
+        user_id=uid,
+        type=NotificationType.LEAD_ASSIGNED,
         payload={"leadId": str(uuid.uuid4()), "email": "pref@a.example.com"},
     )
     # In-app still written, but no email now.
@@ -211,13 +213,20 @@ async def test_quiet_hours_do_not_batch_time_sensitive_type(
     # send immediately despite quiet hours — never batched into a digest.
     quiet = {"notifications": {"quiet_hours": {"start": "00:00", "end": "23:59"}}}
     tenant, agent = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.AGENT,
-        email="quiet@a.example.com", settings=quiet,
+        client,
+        platform_headers,
+        create_tenant_user,
+        Role.AGENT,
+        email="quiet@a.example.com",
+        settings=quiet,
     )
     uid = await _user_id(client, agent)
     before = await mailpit_count("quiet@a.example.com", "lead")
     await _notify_direct(
-        app, tenant, user_id=uid, type=NotificationType.LEAD_ASSIGNED,
+        app,
+        tenant,
+        user_id=uid,
+        type=NotificationType.LEAD_ASSIGNED,
         payload={"leadId": str(uuid.uuid4()), "email": "quiet@a.example.com"},
         settings=quiet,
     )
@@ -251,7 +260,9 @@ async def test_digest_sweep_batches_and_is_idempotent(
         repo = NotificationsRepository(session)
         for _ in range(3):
             note = Notification(
-                tenant_id=tid, user_id=uid, type=NotificationType.LEAD_ASSIGNED,
+                tenant_id=tid,
+                user_id=uid,
+                type=NotificationType.LEAD_ASSIGNED,
                 payload={"leadId": str(uuid.uuid4())},
             )
             repo.add(note)
@@ -299,9 +310,7 @@ async def test_ws_ticket_and_live_push(
     assert redeemed == uid
     # Replay fails (GETDEL consumed it).
     assert (
-        await redeem_ws_ticket(
-            app.state.redis, ticket, tenant_id=uuid.UUID(str(tenant["id"]))
-        )
+        await redeem_ws_ticket(app.state.redis, ticket, tenant_id=uuid.UUID(str(tenant["id"])))
         is None
     )
 
@@ -313,7 +322,10 @@ async def test_ws_ticket_and_live_push(
     await pubsub.get_message(timeout=1.0)
 
     await _notify_direct(
-        app, tenant, user_id=uid, type=NotificationType.LEAD_ASSIGNED,
+        app,
+        tenant,
+        user_id=uid,
+        type=NotificationType.LEAD_ASSIGNED,
         payload={"leadId": str(uuid.uuid4())},
     )
 
@@ -339,15 +351,11 @@ async def test_ws_ticket_from_other_tenant_rejected(
     _, agent = await tenant_and_login(
         client, platform_headers, create_tenant_user, Role.AGENT, email="wsx@a.example.com"
     )
-    ticket = (await client.post(f"{ME_NOTIFICATIONS}/ws-ticket", headers=agent)).json()[
-        "ticket"
-    ]
+    ticket = (await client.post(f"{ME_NOTIFICATIONS}/ws-ticket", headers=agent)).json()["ticket"]
     from app.modules.notifications.ws import redeem_ws_ticket
 
     # A different tenant id can't redeem the ticket.
-    assert (
-        await redeem_ws_ticket(app.state.redis, ticket, tenant_id=uuid.uuid4()) is None
-    )
+    assert await redeem_ws_ticket(app.state.redis, ticket, tenant_id=uuid.uuid4()) is None
 
 
 # ---- migrated real call sites ----
@@ -428,7 +436,10 @@ async def test_notifications_isolated_per_tenant(
     )
     uid_a = await _user_id(client, agent_a)
     await _notify_direct(
-        app, tenant_a, user_id=uid_a, type=NotificationType.LEAD_ASSIGNED,
+        app,
+        tenant_a,
+        user_id=uid_a,
+        type=NotificationType.LEAD_ASSIGNED,
         payload={"leadId": str(uuid.uuid4())},
     )
 
@@ -437,8 +448,12 @@ async def test_notifications_isolated_per_tenant(
         client, platform_headers, name="Agency B", slug="agency-b", domain=HOST_B
     )
     agent_b = await add_user(
-        client, create_tenant_user, str(tenant_b["id"]), Role.AGENT,
-        email="iso-b@b.example.com", host=HOST_B,
+        client,
+        create_tenant_user,
+        str(tenant_b["id"]),
+        Role.AGENT,
+        email="iso-b@b.example.com",
+        host=HOST_B,
     )
     resp = await client.get(ME_NOTIFICATIONS, headers=agent_b)
     assert resp.status_code == 200

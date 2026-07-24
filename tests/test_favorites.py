@@ -136,7 +136,9 @@ async def test_favorites_list_drops_unpublished(
     assert resp.json()["items"] == []  # the row survives, the card drops out
 
 
-async def test_favorites_require_auth(client: AsyncClient, platform_headers: dict[str, str],
+async def test_favorites_require_auth(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
     await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
@@ -238,9 +240,7 @@ async def test_anonymous_signup_confirm_creates_lead(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     email = "anon-signup@example.com"
     resp = await client.post(
         SIGNUP,
@@ -257,9 +257,7 @@ async def test_anonymous_signup_confirm_creates_lead(
     assert confirmed.json()["isActive"] is True
 
     # The consumed token is single-use.
-    replay = await client.post(
-        f"{SIGNUP}/confirm", json={"token": token}, headers={"Host": HOST_A}
-    )
+    replay = await client.post(f"{SIGNUP}/confirm", json={"token": token}, headers={"Host": HOST_A})
     assert replay.status_code == 401
 
     # The opt-in was the capture: a search_signup lead now exists.

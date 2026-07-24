@@ -243,9 +243,7 @@ async def list_audit_log(
         values = _decode_cursor(cursor)
         after = (datetime.fromisoformat(values["created_at"]), uuid.UUID(values["id"]))
     repo = AuditRepository(session)
-    rows = await repo.list_page(
-        tenant_id=tenant_id, action=action, after=after, limit=page_size
-    )
+    rows = await repo.list_page(tenant_id=tenant_id, action=action, after=after, limit=page_size)
     items = rows[:page_size]
     next_cursor = None
     if len(rows) > page_size:
@@ -312,11 +310,7 @@ async def billing_webhook(
     payload = await request.body()
     service = build_billing_service(session, request.app.state.redis)
     try:
-        received, processed = await service.handle_webhook(
-            payload=payload, signature=header_sig
-        )
+        received, processed = await service.handle_webhook(payload=payload, signature=header_sig)
     except WebhookVerificationError as exc:
-        raise InvalidWebhookError(
-            "The webhook signature could not be verified."
-        ) from exc
+        raise InvalidWebhookError("The webhook signature could not be verified.") from exc
     return WebhookAck(received=received, processed=processed)

@@ -27,9 +27,7 @@ PORTAL_REPORTS = "/api/v1/portal/content/reports"
 
 # A square boundary around Alger centre (lon 3.042, lat 36.7525) — the default
 # listing point in LISTING_BODY falls inside it.
-ALGER_BOUNDARY = [
-    [[2.9, 36.6], [3.2, 36.6], [3.2, 36.9], [2.9, 36.9], [2.9, 36.6]]
-]
+ALGER_BOUNDARY = [[[2.9, 36.6], [3.2, 36.6], [3.2, 36.9], [2.9, 36.9], [2.9, 36.6]]]
 
 GUIDE_BODY: dict[str, Any] = {
     "slug": "algiers-centre",
@@ -242,9 +240,7 @@ async def test_report_download_gate_mints_lead(
     assert "report.pdf" in url or "report-q3-2026" in url
 
     # A lead landed with the market_report source.
-    leads = await client.get(
-        "/api/v1/portal/leads?source=market_report", headers=admin
-    )
+    leads = await client.get("/api/v1/portal/leads?source=market_report", headers=admin)
     assert leads.status_code == 200
     assert leads.json()["totalEstimate"] == 1
 

@@ -65,9 +65,7 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("0"),
         ),
-        sa.Column(
-            "circuit_open", sa.Boolean(), nullable=False, server_default=sa.text("false")
-        ),
+        sa.Column("circuit_open", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column(
             "created_at",
             sa.TIMESTAMP(timezone=True),
@@ -97,12 +95,8 @@ def upgrade() -> None:
             "tenant_id", "listing_id", "portal_key", name="uq_portal_sync_listing_portal"
         ),
     )
-    op.create_index(
-        op.f("ix_portal_sync_state_tenant_id"), _TABLE, ["tenant_id"], unique=False
-    )
-    op.create_index(
-        op.f("ix_portal_sync_state_listing_id"), _TABLE, ["listing_id"], unique=False
-    )
+    op.create_index(op.f("ix_portal_sync_state_tenant_id"), _TABLE, ["tenant_id"], unique=False)
+    op.create_index(op.f("ix_portal_sync_state_listing_id"), _TABLE, ["listing_id"], unique=False)
     # The admin list pages by (updated_at DESC, id DESC), optionally per portal.
     op.create_index(
         "ix_portal_sync_state_tenant_updated",

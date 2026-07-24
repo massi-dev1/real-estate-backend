@@ -29,25 +29,37 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 CONSENT_CATEGORY = sa.Enum(
-    "necessary", "analytics", "marketing",
-    name="consent_category", native_enum=False, length=20,
+    "necessary",
+    "analytics",
+    "marketing",
+    name="consent_category",
+    native_enum=False,
+    length=20,
 )
 DSR_KIND = sa.Enum("export", "erasure", name="dsr_kind", native_enum=False, length=20)
 DSR_STATUS = sa.Enum(
-    "pending", "completed", "cancelled",
-    name="dsr_status", native_enum=False, length=20,
+    "pending",
+    "completed",
+    "cancelled",
+    name="dsr_status",
+    native_enum=False,
+    length=20,
 )
 
 
 def _timestamps() -> list[sa.Column]:
     return [
         sa.Column(
-            "created_at", sa.TIMESTAMP(timezone=True),
-            server_default=sa.text("now()"), nullable=False,
+            "created_at",
+            sa.TIMESTAMP(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
         sa.Column(
-            "updated_at", sa.TIMESTAMP(timezone=True),
-            server_default=sa.text("now()"), nullable=False,
+            "updated_at",
+            sa.TIMESTAMP(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
     ]
 
@@ -74,25 +86,29 @@ def upgrade() -> None:
             name="ck_consent_records_subject_present",
         ),
         sa.ForeignKeyConstraint(
-            ["tenant_id"], ["tenants.id"],
-            name=op.f("fk_consent_records_tenant_id_tenants"), ondelete="CASCADE",
+            ["tenant_id"],
+            ["tenants.id"],
+            name=op.f("fk_consent_records_tenant_id_tenants"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
-            ["user_id"], ["users.id"],
-            name=op.f("fk_consent_records_user_id_users"), ondelete="SET NULL",
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_consent_records_user_id_users"),
+            ondelete="SET NULL",
         ),
         sa.ForeignKeyConstraint(
-            ["legal_page_id"], ["legal_pages.id"],
-            name=op.f("fk_consent_records_legal_page_id_legal_pages"), ondelete="SET NULL",
+            ["legal_page_id"],
+            ["legal_pages.id"],
+            name=op.f("fk_consent_records_legal_page_id_legal_pages"),
+            ondelete="SET NULL",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_consent_records")),
     )
     op.create_index(
         op.f("ix_consent_records_tenant_id"), "consent_records", ["tenant_id"], unique=False
     )
-    op.create_index(
-        op.f("ix_consent_records_email"), "consent_records", ["email"], unique=False
-    )
+    op.create_index(op.f("ix_consent_records_email"), "consent_records", ["email"], unique=False)
     op.create_index(
         op.f("ix_consent_records_session_id"), "consent_records", ["session_id"], unique=False
     )
@@ -111,27 +127,33 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column(
-            "categories", postgresql.JSONB(),
-            server_default=sa.text("'[]'::jsonb"), nullable=False,
+            "categories",
+            postgresql.JSONB(),
+            server_default=sa.text("'[]'::jsonb"),
+            nullable=False,
         ),
         sa.Column(
-            "banner_copy", postgresql.JSONB(),
-            server_default=sa.text("'{}'::jsonb"), nullable=False,
+            "banner_copy",
+            postgresql.JSONB(),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
         ),
-        sa.Column(
-            "is_enabled", sa.Boolean(), server_default=sa.text("true"), nullable=False
-        ),
+        sa.Column("is_enabled", sa.Boolean(), server_default=sa.text("true"), nullable=False),
         *_timestamps(),
         sa.ForeignKeyConstraint(
-            ["tenant_id"], ["tenants.id"],
-            name=op.f("fk_cookie_consent_configs_tenant_id_tenants"), ondelete="CASCADE",
+            ["tenant_id"],
+            ["tenants.id"],
+            name=op.f("fk_cookie_consent_configs_tenant_id_tenants"),
+            ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_cookie_consent_configs")),
         sa.UniqueConstraint("tenant_id", name="uq_cookie_consent_configs_tenant"),
     )
     op.create_index(
         op.f("ix_cookie_consent_configs_tenant_id"),
-        "cookie_consent_configs", ["tenant_id"], unique=False,
+        "cookie_consent_configs",
+        ["tenant_id"],
+        unique=False,
     )
     for stmt in enable_tenant_rls_sql("cookie_consent_configs"):
         op.execute(stmt)
@@ -148,24 +170,28 @@ def upgrade() -> None:
         sa.Column("purge_scheduled_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column("completed_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column(
-            "result", postgresql.JSONB(),
-            server_default=sa.text("'{}'::jsonb"), nullable=False,
+            "result",
+            postgresql.JSONB(),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
         ),
         sa.Column("ip", sa.String(length=45), nullable=True),
         *_timestamps(),
         sa.ForeignKeyConstraint(
-            ["tenant_id"], ["tenants.id"],
-            name=op.f("fk_dsr_requests_tenant_id_tenants"), ondelete="CASCADE",
+            ["tenant_id"],
+            ["tenants.id"],
+            name=op.f("fk_dsr_requests_tenant_id_tenants"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
-            ["user_id"], ["users.id"],
-            name=op.f("fk_dsr_requests_user_id_users"), ondelete="SET NULL",
+            ["user_id"],
+            ["users.id"],
+            name=op.f("fk_dsr_requests_user_id_users"),
+            ondelete="SET NULL",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_dsr_requests")),
     )
-    op.create_index(
-        op.f("ix_dsr_requests_tenant_id"), "dsr_requests", ["tenant_id"], unique=False
-    )
+    op.create_index(op.f("ix_dsr_requests_tenant_id"), "dsr_requests", ["tenant_id"], unique=False)
     for stmt in enable_tenant_rls_sql("dsr_requests"):
         op.execute(stmt)
 
@@ -178,9 +204,7 @@ def downgrade() -> None:
 
     for stmt in disable_tenant_rls_sql("cookie_consent_configs"):
         op.execute(stmt)
-    op.drop_index(
-        op.f("ix_cookie_consent_configs_tenant_id"), table_name="cookie_consent_configs"
-    )
+    op.drop_index(op.f("ix_cookie_consent_configs_tenant_id"), table_name="cookie_consent_configs")
     op.drop_table("cookie_consent_configs")
 
     for stmt in disable_tenant_rls_sql("consent_records"):

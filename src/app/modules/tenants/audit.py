@@ -51,9 +51,7 @@ class AuditRepository:
         if action is not None:
             stmt = stmt.where(AuditLogEntry.action == action)
         if after is not None:
-            stmt = stmt.where(
-                tuple_(AuditLogEntry.created_at, AuditLogEntry.id) < after
-            )
+            stmt = stmt.where(tuple_(AuditLogEntry.created_at, AuditLogEntry.id) < after)
         return list((await self.session.execute(stmt.limit(limit + 1))).scalars().all())
 
     async def count(self, *, tenant_id: uuid.UUID | None, action: str | None) -> int:

@@ -174,9 +174,7 @@ class AnalyticsService:
             acc["saves"] += row.saves
             acc["inquiries"] += row.inquiries
         series = [
-            TrafficPointOut(
-                day=day, views=v["views"], saves=v["saves"], inquiries=v["inquiries"]
-            )
+            TrafficPointOut(day=day, views=v["views"], saves=v["saves"], inquiries=v["inquiries"])
             for day, v in sorted(by_day.items())
         ]
         return TrafficSummaryOut(
@@ -316,9 +314,7 @@ class AnalyticsService:
     async def _rollup_source_performance(self, tenant_id: uuid.UUID, day: date) -> None:
         start, end = _day_bounds_utc(day)
         rows = await self.leads.source_counts_for_day(tenant_id, start, end)
-        per_source = {
-            source: {"created": created, "won": won} for source, created, won in rows
-        }
+        per_source = {source: {"created": created, "won": won} for source, created, won in rows}
         await self.repo.upsert_source_performance(tenant_id, day, per_source)
 
     # ---- retention + partition maintenance ----

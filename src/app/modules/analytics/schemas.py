@@ -156,5 +156,3 @@ class ListingPerformanceReportOut(OutSchema):
     window_start: date
     window_end: date
     listings: list[ListingPerformanceOut]
-
-

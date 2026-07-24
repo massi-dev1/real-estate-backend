@@ -108,9 +108,7 @@ async def logout(
 
 
 @auth_router.post("/logout-all", status_code=status.HTTP_204_NO_CONTENT)
-async def logout_all(
-    user: CurrentUserDep, service: AuthServiceDep, response: Response
-) -> None:
+async def logout_all(user: CurrentUserDep, service: AuthServiceDep, response: Response) -> None:
     await service.logout_all(user.tenant_id, user.id, user.jti)
     _clear_refresh_cookie(response, cookie_path=TENANT_AUTH_PATH)
 
@@ -131,9 +129,7 @@ async def reset_password(
 
 
 @auth_router.post("/verify-email/request", status_code=status.HTTP_202_ACCEPTED)
-async def request_email_verification(
-    user: CurrentUserDep, service: AuthServiceDep
-) -> AcceptedOut:
+async def request_email_verification(user: CurrentUserDep, service: AuthServiceDep) -> AcceptedOut:
     await service.resend_email_verification(user.tenant_id, user.id)
     return AcceptedOut(detail="A verification code has been sent.")
 
@@ -160,9 +156,7 @@ async def platform_login(
 async def platform_refresh(
     service: AuthServiceDep, request: Request, response: Response
 ) -> TokenOut:
-    issued = await service.refresh(
-        None, request.cookies.get(REFRESH_COOKIE), client_info(request)
-    )
+    issued = await service.refresh(None, request.cookies.get(REFRESH_COOKIE), client_info(request))
     return _token_response(issued, request, response, cookie_path=PLATFORM_AUTH_PATH)
 
 

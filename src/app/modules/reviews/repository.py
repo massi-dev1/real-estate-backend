@@ -102,9 +102,7 @@ class ReviewsRepository:
         after: tuple[datetime, uuid.UUID] | None,
         limit: int,
     ) -> list[Review]:
-        stmt = self._public_base(
-            tenant_id, agent_user_id=agent_user_id, agency_only=agency_only
-        )
+        stmt = self._public_base(tenant_id, agent_user_id=agent_user_id, agency_only=agency_only)
         if after is not None:
             stmt = stmt.where(
                 or_(
@@ -123,12 +121,9 @@ class ReviewsRepository:
         """(count, average) of approved reviews. ``agent_user_id`` scopes to one
         agent; ``agency_only`` scopes to tenant-wide (no-agent) testimonials;
         both falsy = every approved review in the tenant."""
-        stmt = (
-            self._public_base(
-                tenant_id, agent_user_id=agent_user_id, agency_only=agency_only
-            )
-            .with_only_columns(func.count(), func.avg(Review.rating))
-        )
+        stmt = self._public_base(
+            tenant_id, agent_user_id=agent_user_id, agency_only=agency_only
+        ).with_only_columns(func.count(), func.avg(Review.rating))
         count, avg = (await self.session.execute(stmt)).one()
         return int(count), float(avg) if avg is not None else None
 

@@ -58,9 +58,7 @@ async def setup_published_agent(
     rules: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, str], str, dict[str, Any]]:
     """Tenant + admin + a published agent profile with a weekly schedule."""
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="tours@a.example.com"
     )
@@ -88,9 +86,7 @@ async def get_slots(client: AsyncClient, day: date) -> list[dict[str, Any]]:
     return list(resp.json())
 
 
-async def book(
-    client: AsyncClient, start_at: datetime, *, email: str, **overrides: Any
-) -> Any:
+async def book(client: AsyncClient, start_at: datetime, *, email: str, **overrides: Any) -> Any:
     return await client.post(
         f"/api/v1/agents/{SLUG}/appointments",
         json=booking_body(start_at, email=email, **overrides),
@@ -371,7 +367,10 @@ async def test_portal_visibility_is_ownership_scoped(
     assert len((await client.get(PORTAL_APPOINTMENTS, headers=agent)).json()["items"]) == 1
     assert len((await client.get(PORTAL_APPOINTMENTS, headers=admin)).json()["items"]) == 1
     buyer = await add_user(
-        client, create_tenant_user, str(tenant["id"]), Role.BUYER_RENTER,
+        client,
+        create_tenant_user,
+        str(tenant["id"]),
+        Role.BUYER_RENTER,
         email="buyer2@a.example.com",
     )
     assert (await client.get(PORTAL_APPOINTMENTS, headers=buyer)).status_code == 403

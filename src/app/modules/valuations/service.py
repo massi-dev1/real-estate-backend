@@ -283,7 +283,7 @@ class ValuationsService:
     async def mortgage_email(
         self, tenant: TenantContext, data: MortgageEmailCreate
     ) -> tuple[Lead | None, MortgageEstimateOut]:
-        """"Email me this estimate": recompute server-side (never trust a
+        """ "Email me this estimate": recompute server-side (never trust a
         client-echoed number), mint the lead, and mail post-commit. Honeypot
         hits return the estimate with no lead — the calculator output gives a
         bot nothing to distinguish."""

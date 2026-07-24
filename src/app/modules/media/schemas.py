@@ -31,9 +31,7 @@ I18nText = dict[str, str]
 # Accepted declared types per upload kind; the worker verifies magic bytes.
 MEDIA_CONTENT_TYPES: dict[MediaKind, frozenset[str]] = {
     MediaKind.PHOTO: frozenset({"image/jpeg", "image/png", "image/webp"}),
-    MediaKind.FLOORPLAN: frozenset(
-        {"image/jpeg", "image/png", "image/webp", "application/pdf"}
-    ),
+    MediaKind.FLOORPLAN: frozenset({"image/jpeg", "image/png", "image/webp", "application/pdf"}),
     MediaKind.DOC: frozenset({"application/pdf"}),
 }
 
@@ -204,9 +202,7 @@ class PublicMediaOut(OutSchema):
         )
 
 
-def _variants_out(
-    media: ListingMedia, url_for: Callable[[str], str]
-) -> dict[str, MediaVariantOut]:
+def _variants_out(media: ListingMedia, url_for: Callable[[str], str]) -> dict[str, MediaVariantOut]:
     return {
         name: MediaVariantOut(url=url_for(v["key"]), width=v["width"], height=v["height"])
         for name, v in media.variants.items()

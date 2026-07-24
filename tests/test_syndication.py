@@ -217,9 +217,7 @@ async def test_publish_pushes_to_enabled_portal(
     assert ("push", None) in fake_adapter.calls
 
     # Sync state records the success + the portal's remote id.
-    state = await client.get(
-        f"{PORTAL}/listings/{listing['id']}/state", headers=admin
-    )
+    state = await client.get(f"{PORTAL}/listings/{listing['id']}/state", headers=admin)
     assert state.status_code == 200, state.text
     rows = state.json()
     assert len(rows) == 1
@@ -312,9 +310,7 @@ async def test_permanent_failure_records_failed_no_retry(
     assert row["circuitOpen"] is False
 
 
-async def _fail_until_open(
-    client: AsyncClient, admin: dict[str, str], listing_id: str
-) -> None:
+async def _fail_until_open(client: AsyncClient, admin: dict[str, str], listing_id: str) -> None:
     """Drive consecutive failures via edits (each enqueues an UPDATE that, with
     no remote id yet, becomes a PUSH) until the breaker trips. Edits — unlike a
     manual re-push — never reset the circuit, so failures accumulate cleanly.
@@ -672,9 +668,7 @@ async def test_sync_state_is_tenant_isolated(
     assert state_b.json()["items"] == []
 
     # And B cannot read A's listing sync state (404 — no oracle).
-    cross = await client.get(
-        f"{PORTAL}/listings/{listing_a['id']}/state", headers=admin_b
-    )
+    cross = await client.get(f"{PORTAL}/listings/{listing_a['id']}/state", headers=admin_b)
     assert cross.status_code == 200
     assert cross.json() == []  # RLS: A's rows are invisible, so empty
 

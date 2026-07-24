@@ -49,9 +49,7 @@ async def start(client: AsyncClient, **overrides: Any) -> httpx.Response:
 
 
 async def set_details(client: AsyncClient, token: str, **fields: Any) -> httpx.Response:
-    return await client.patch(
-        f"{VALUATIONS}/{token}", json=fields, headers={"Host": HOST_A}
-    )
+    return await client.patch(f"{VALUATIONS}/{token}", json=fields, headers={"Host": HOST_A})
 
 
 async def complete(client: AsyncClient, token: str, **overrides: Any) -> httpx.Response:
@@ -60,9 +58,7 @@ async def complete(client: AsyncClient, token: str, **overrides: Any) -> httpx.R
         "renderedAt": rendered_at(),
         **overrides,
     }
-    return await client.post(
-        f"{VALUATIONS}/{token}/complete", json=body, headers={"Host": HOST_A}
-    )
+    return await client.post(f"{VALUATIONS}/{token}/complete", json=body, headers={"Host": HOST_A})
 
 
 async def seed_comps(
@@ -81,9 +77,7 @@ async def seed_comps(
             purpose="sale",
             location={"lat": SUBJECT_LAT + i * 0.0001, "lng": SUBJECT_LNG},
         )
-        assert (
-            await transition(client, admin, listing["id"], "published")
-        ).status_code == 200
+        assert (await transition(client, admin, listing["id"], "published")).status_code == 200
 
 
 async def lead_activities(

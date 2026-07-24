@@ -102,9 +102,7 @@ async def test_photo_upload_processes_variants_and_blurhash(
     # 4 widths x (webp + jpeg); a 1920w original is not required — small
     # sources are never upscaled, but every variant name still exists.
     assert set(media["variants"]) == {
-        f"{name}_{fmt}"
-        for name in ("thumb", "card", "gallery", "full")
-        for fmt in ("webp", "jpeg")
+        f"{name}_{fmt}" for name in ("thumb", "card", "gallery", "full") for fmt in ("webp", "jpeg")
     }
     thumb = media["variants"]["thumb_webp"]
     assert thumb["width"] == 320
@@ -180,9 +178,7 @@ async def test_photo_quota_and_size_cap(
     assert third.status_code == 403
     assert "quota" in third.json()["detail"]
 
-    over = await request_upload(
-        client, admin, listing["id"], size_bytes=26 * 1024 * 1024
-    )
+    over = await request_upload(client, admin, listing["id"], size_bytes=26 * 1024 * 1024)
     assert over.status_code == 403
 
 

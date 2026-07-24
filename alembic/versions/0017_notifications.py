@@ -117,9 +117,7 @@ def upgrade() -> None:
     op.create_index(
         op.f("ix_notifications_tenant_id"), "notifications", ["tenant_id"], unique=False
     )
-    op.create_index(
-        op.f("ix_notifications_user_id"), "notifications", ["user_id"], unique=False
-    )
+    op.create_index(op.f("ix_notifications_user_id"), "notifications", ["user_id"], unique=False)
     op.create_index(
         "ix_notifications_tenant_user_created",
         "notifications",
@@ -286,9 +284,7 @@ def downgrade() -> None:
     )
     op.drop_table("notification_digest_items")
 
-    op.drop_index(
-        "ix_notification_sends_tenant_notification", table_name="notification_sends"
-    )
+    op.drop_index("ix_notification_sends_tenant_notification", table_name="notification_sends")
     op.drop_index(op.f("ix_notification_sends_tenant_id"), table_name="notification_sends")
     op.drop_table("notification_sends")
 
@@ -306,9 +302,7 @@ def downgrade() -> None:
     )
     op.drop_table("notification_preferences")
 
-    op.drop_index(
-        "ix_notifications_tenant_user_created", table_name="notifications"
-    )
+    op.drop_index("ix_notifications_tenant_user_created", table_name="notifications")
     op.drop_index(op.f("ix_notifications_user_id"), table_name="notifications")
     op.drop_index(op.f("ix_notifications_tenant_id"), table_name="notifications")
     op.drop_table("notifications")

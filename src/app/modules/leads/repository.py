@@ -80,9 +80,7 @@ class LeadsRepository:
         scope_user_ids: Collection[uuid.UUID] | None = None,
         for_update: bool = False,
     ) -> Lead | None:
-        stmt = self._lead_base(tenant_id, scope_user_ids=scope_user_ids).where(
-            Lead.id == lead_id
-        )
+        stmt = self._lead_base(tenant_id, scope_user_ids=scope_user_ids).where(Lead.id == lead_id)
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()

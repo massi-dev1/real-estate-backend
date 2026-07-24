@@ -96,9 +96,7 @@ class StubBillingProvider:
 
     @staticmethod
     def _parse_header(signature: str) -> tuple[int, str]:
-        parts = dict(
-            item.split("=", 1) for item in signature.split(",") if "=" in item
-        )
+        parts = dict(item.split("=", 1) for item in signature.split(",") if "=" in item)
         try:
             return int(parts["t"]), parts["v1"]
         except (KeyError, ValueError) as exc:

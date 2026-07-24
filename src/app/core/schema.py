@@ -48,11 +48,7 @@ def reject_null_for(*fields: str) -> Any:
     """
 
     def _check(self: BaseModel) -> BaseModel:
-        nulled = {
-            f
-            for f in self.model_fields_set & set(fields)
-            if getattr(self, f) is None
-        }
+        nulled = {f for f in self.model_fields_set & set(fields) if getattr(self, f) is None}
         if nulled:
             raise ValueError(f"fields cannot be set to null: {sorted(nulled)}")
         return self

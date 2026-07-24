@@ -51,9 +51,7 @@ def upgrade() -> None:
         sa.Column("status", REVIEW_STATUS, server_default="pending", nullable=False),
         # Set by the moderator on approval (or a future verified-client path):
         # the review reflects a real, confirmed relationship.
-        sa.Column(
-            "is_verified", sa.Boolean(), server_default=sa.text("false"), nullable=False
-        ),
+        sa.Column("is_verified", sa.Boolean(), server_default=sa.text("false"), nullable=False),
         sa.Column("moderated_by", sa.Uuid(), nullable=True),
         sa.Column("moderated_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column("moderation_note", sa.String(length=500), nullable=True),
@@ -97,9 +95,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_reviews")),
     )
     op.create_index(op.f("ix_reviews_tenant_id"), "reviews", ["tenant_id"], unique=False)
-    op.create_index(
-        op.f("ix_reviews_agent_user_id"), "reviews", ["agent_user_id"], unique=False
-    )
+    op.create_index(op.f("ix_reviews_agent_user_id"), "reviews", ["agent_user_id"], unique=False)
     op.create_index(op.f("ix_reviews_listing_id"), "reviews", ["listing_id"], unique=False)
     # Covers the moderation queue (portal) and the public/aggregate reads:
     # filter by status, newest first, optionally per agent.

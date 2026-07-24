@@ -118,8 +118,7 @@ async def _run_scoped_many[T](
     try:
         session_factory = create_session_factory(engine)
         return [
-            await _scoped_transaction(session_factory, tenant_id, fn)
-            for tenant_id, fn in calls
+            await _scoped_transaction(session_factory, tenant_id, fn) for tenant_id, fn in calls
         ]
     finally:
         await engine.dispose()

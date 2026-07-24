@@ -34,9 +34,7 @@ class AgentsRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def get_published_by_slug(
-        self, tenant_id: uuid.UUID, slug: str
-    ) -> AgentProfile | None:
+    async def get_published_by_slug(self, tenant_id: uuid.UUID, slug: str) -> AgentProfile | None:
         stmt = select(AgentProfile).where(
             AgentProfile.tenant_id == tenant_id,
             AgentProfile.slug == slug,
@@ -77,9 +75,7 @@ class AgentsRepository:
         return list((await self.session.execute(stmt)).scalars())
 
     async def count_published(self, tenant_id: uuid.UUID, *, specialty: str | None) -> int:
-        stmt = self._published_base(tenant_id, specialty=specialty).with_only_columns(
-            func.count()
-        )
+        stmt = self._published_base(tenant_id, specialty=specialty).with_only_columns(func.count())
         return (await self.session.execute(stmt)).scalar_one()
 
     async def list_portal(self, tenant_id: uuid.UUID) -> list[AgentProfile]:

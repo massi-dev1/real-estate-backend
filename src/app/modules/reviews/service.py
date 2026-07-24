@@ -61,9 +61,7 @@ class ReviewsService:
 
         agent_user_id: uuid.UUID | None = None
         if data.agent_slug is not None:
-            agent_user_id = await self.agents.published_user_id_for_slug(
-                tenant.id, data.agent_slug
-            )
+            agent_user_id = await self.agents.published_user_id_for_slug(tenant.id, data.agent_slug)
             if agent_user_id is None:
                 raise NotFoundError("Agent not found.")
 
@@ -118,9 +116,7 @@ class ReviewsService:
         )
         items = rows[:page_size]
         next_cursor = _next_cursor(rows, items, page_size)
-        total = await self.repo.count_portal(
-            tenant.id, status=status, agent_user_id=agent_user_id
-        )
+        total = await self.repo.count_portal(tenant.id, status=status, agent_user_id=agent_user_id)
         return items, next_cursor, total
 
     async def moderate(
@@ -200,9 +196,7 @@ class ReviewsService:
     async def aggregate_for_agent(
         self, tenant_id: uuid.UUID, agent_user_id: uuid.UUID
     ) -> tuple[int, float | None]:
-        return await self.repo.aggregate(
-            tenant_id, agent_user_id=agent_user_id, agency_only=False
-        )
+        return await self.repo.aggregate(tenant_id, agent_user_id=agent_user_id, agency_only=False)
 
     async def aggregate_for_tenant(self, tenant_id: uuid.UUID) -> tuple[int, float | None]:
         """Every approved review in the tenant — the agency-wide rating."""
@@ -215,15 +209,11 @@ class ReviewsService:
         return await self.repo.aggregate_by_agent(tenant_id, agent_user_ids)
 
 
-def _next_cursor(
-    rows: list[Review], items: list[Review], page_size: int
-) -> str | None:
+def _next_cursor(rows: list[Review], items: list[Review], page_size: int) -> str | None:
     if len(rows) <= page_size:
         return None
     last = items[-1]
-    return encode_cursor(
-        {"created_at": last.created_at.isoformat(), "id": str(last.id)}
-    )
+    return encode_cursor({"created_at": last.created_at.isoformat(), "id": str(last.id)})
 
 
 def _decode_keyset(cursor: str) -> tuple[datetime, uuid.UUID]:

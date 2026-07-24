@@ -81,9 +81,7 @@ def upgrade() -> None:
         "tenants",
         sa.Column("plan", sa.String(length=40), server_default="trial", nullable=False),
     )
-    op.add_column(
-        "tenants", sa.Column("trial_ends_at", sa.TIMESTAMP(timezone=True), nullable=True)
-    )
+    op.add_column("tenants", sa.Column("trial_ends_at", sa.TIMESTAMP(timezone=True), nullable=True))
     op.add_column(
         "tenants", sa.Column("offboarding_at", sa.TIMESTAMP(timezone=True), nullable=True)
     )
@@ -91,14 +89,10 @@ def upgrade() -> None:
         "tenants",
         sa.Column("deletion_scheduled_at", sa.TIMESTAMP(timezone=True), nullable=True),
     )
-    op.add_column(
-        "tenants", sa.Column("deleted_at", sa.TIMESTAMP(timezone=True), nullable=True)
-    )
+    op.add_column("tenants", sa.Column("deleted_at", sa.TIMESTAMP(timezone=True), nullable=True))
     # The offboard export archive's private-bucket key (§8.16) — a presigned GET
     # off this lets the departing tenant download their data before the purge.
-    op.add_column(
-        "tenants", sa.Column("export_object_key", sa.String(length=500), nullable=True)
-    )
+    op.add_column("tenants", sa.Column("export_object_key", sa.String(length=500), nullable=True))
 
     # ---- tenant_domains: DNS TXT-challenge verification ----
     op.add_column(
@@ -121,9 +115,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column("listings_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
         sa.Column("agents_count", sa.Integer(), server_default=sa.text("0"), nullable=False),
-        sa.Column(
-            "storage_bytes", sa.BigInteger(), server_default=sa.text("0"), nullable=False
-        ),
+        sa.Column("storage_bytes", sa.BigInteger(), server_default=sa.text("0"), nullable=False),
         # Monthly email counter + the month it belongs to ("YYYY-MM"); a new
         # month resets the counter on the next increment (checked in-service).
         sa.Column("emails_sent", sa.Integer(), server_default=sa.text("0"), nullable=False),

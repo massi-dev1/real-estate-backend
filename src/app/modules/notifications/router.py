@@ -130,9 +130,7 @@ async def notifications_ws(websocket: WebSocket, ticket: str = Query(...)) -> No
     await _relay_user_channel(websocket, redis, user_id)
 
 
-async def _relay_user_channel(
-    websocket: WebSocket, redis: Redis, user_id: uuid.UUID
-) -> None:
+async def _relay_user_channel(websocket: WebSocket, redis: Redis, user_id: uuid.UUID) -> None:
     channel = user_channel(user_id)
     pubsub = redis.pubsub()
     await pubsub.subscribe(channel)

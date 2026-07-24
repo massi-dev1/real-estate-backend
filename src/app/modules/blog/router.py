@@ -111,14 +111,10 @@ async def blog_rss(
         title = escape(pick_localized(post.title, resolved) or post.slug)
         link = f"https://{host}/blog/{escape(post.slug)}"
         description = escape(
-            pick_localized(post.excerpt, resolved)
-            or service.excerpt_fallback(post, resolved)
-            or ""
+            pick_localized(post.excerpt, resolved) or service.excerpt_fallback(post, resolved) or ""
         )
         # RFC-822 pubDate — email.utils, not isoformat (which is wrong for RSS).
-        pub_date = (
-            format_datetime(post.published_at) if post.published_at is not None else ""
-        )
+        pub_date = format_datetime(post.published_at) if post.published_at is not None else ""
         items += (
             "<item>"
             f"<title>{title}</title>"

@@ -166,10 +166,7 @@ class ContentRepository:
         if after is not None:
             stmt = stmt.where(
                 (NeighborhoodGuide.created_at < after[0])
-                | (
-                    (NeighborhoodGuide.created_at == after[0])
-                    & (NeighborhoodGuide.id < after[1])
-                )
+                | ((NeighborhoodGuide.created_at == after[0]) & (NeighborhoodGuide.id < after[1]))
             )
         stmt = stmt.order_by(
             NeighborhoodGuide.created_at.desc(), NeighborhoodGuide.id.desc()
@@ -186,9 +183,7 @@ class ContentRepository:
             stmt = stmt.where(NeighborhoodGuide.status == PageStatus.PUBLISHED)
         return (await self.session.execute(stmt)).scalar_one()
 
-    async def published_guides_with_boundary(
-        self, tenant_id: uuid.UUID
-    ) -> list[NeighborhoodGuide]:
+    async def published_guides_with_boundary(self, tenant_id: uuid.UUID) -> list[NeighborhoodGuide]:
         """Every published guide that has a boundary — the Beat stats job's
         input (guides without a boundary get no auto stats)."""
         stmt = select(NeighborhoodGuide).where(

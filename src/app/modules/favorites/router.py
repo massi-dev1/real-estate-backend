@@ -66,9 +66,7 @@ async def list_favorites(
     accept_language: str | None = Header(default=None),
 ) -> Page[FavoriteItemOut]:
     resolved = negotiate_locale(locale, accept_language)
-    pairs, next_cursor = await service.list_favorites(
-        tenant, actor, cursor=cursor, limit=limit
-    )
+    pairs, next_cursor = await service.list_favorites(tenant, actor, cursor=cursor, limit=limit)
     covers = await media_service.covers_for(tenant, [listing.id for _, listing in pairs])
     return Page(
         items=[
@@ -153,9 +151,7 @@ public_router = APIRouter(prefix="/saved-searches", tags=["favorites:public"])
 _signup_limit = rate_limit(key_prefix="saved_search_signup", limit=5, window_seconds=60)
 
 
-@public_router.post(
-    "", status_code=status.HTTP_201_CREATED, dependencies=[Depends(_signup_limit)]
-)
+@public_router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(_signup_limit)])
 async def signup_saved_search(
     data: SavedSearchSignupIn,
     tenant: TenantDep,

@@ -62,9 +62,7 @@ async def published_agent(
     create_tenant_user: CreateTenantUser,
 ) -> tuple[dict[str, Any], dict[str, str], dict[str, Any]]:
     """An admin + a published agent profile (slug from PROFILE_BODY)."""
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="agent@a.example.com"
     )
@@ -88,9 +86,7 @@ async def test_submit_lands_pending(
     assert body["status"] == "pending"
     assert uuid.UUID(body["id"])
     # Not visible anywhere public until approved.
-    feed = await client.get(
-        f"/api/v1/agents/{profile['slug']}/reviews", headers={"Host": HOST_A}
-    )
+    feed = await client.get(f"/api/v1/agents/{profile['slug']}/reviews", headers={"Host": HOST_A})
     assert feed.status_code == 200
     assert feed.json()["items"] == []
 
@@ -138,9 +134,7 @@ async def test_submit_with_listing_context(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    _tenant, admin, profile = await published_agent(
-        client, platform_headers, create_tenant_user
-    )
+    _tenant, admin, profile = await published_agent(client, platform_headers, create_tenant_user)
     listing = await make_listing(client, admin)
     await transition(client, admin, listing["id"], "published")
     resp = await submit_review(
@@ -221,13 +215,15 @@ async def test_moderation_requires_permission(
     create_tenant_user: CreateTenantUser,
 ) -> None:
     """An agent (no REVIEW_MODERATE) cannot see or moderate the queue."""
-    tenant, _admin, profile = await published_agent(
-        client, platform_headers, create_tenant_user
-    )
+    tenant, _admin, profile = await published_agent(client, platform_headers, create_tenant_user)
     submit = await submit_review(client, review_body(agentSlug=profile["slug"]))
     review_id = submit.json()["id"]
     agent = await add_user(
-        client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="agent@a.example.com",
+        client,
+        create_tenant_user,
+        str(tenant["id"]),
+        Role.AGENT,
+        email="agent@a.example.com",
         existing=True,
     )
     listed = await client.get(PORTAL_REVIEWS, headers=agent)
@@ -242,9 +238,7 @@ async def test_approve_shows_in_feed_and_aggregate(
     create_tenant_user: CreateTenantUser,
 ) -> None:
     _, admin, profile = await published_agent(client, platform_headers, create_tenant_user)
-    submit = await submit_review(
-        client, review_body(agentSlug=profile["slug"], rating=4)
-    )
+    submit = await submit_review(client, review_body(agentSlug=profile["slug"], rating=4))
     review_id = submit.json()["id"]
 
     approved = await moderate(client, admin, review_id, "approved", isVerified=True)
@@ -253,9 +247,7 @@ async def test_approve_shows_in_feed_and_aggregate(
     assert approved.json()["isVerified"] is True
     assert approved.json()["moderatedBy"] is not None
 
-    feed = await client.get(
-        f"/api/v1/agents/{profile['slug']}/reviews", headers={"Host": HOST_A}
-    )
+    feed = await client.get(f"/api/v1/agents/{profile['slug']}/reviews", headers={"Host": HOST_A})
     items = feed.json()["items"]
     assert len(items) == 1
     assert items[0]["rating"] == 4
@@ -280,9 +272,7 @@ async def test_reject_stays_hidden(
     assert rejected.status_code == 200
     assert rejected.json()["status"] == "rejected"
 
-    feed = await client.get(
-        f"/api/v1/agents/{profile['slug']}/reviews", headers={"Host": HOST_A}
-    )
+    feed = await client.get(f"/api/v1/agents/{profile['slug']}/reviews", headers={"Host": HOST_A})
     assert feed.json()["items"] == []
     detail = await client.get(f"/api/v1/agents/{profile['slug']}", headers={"Host": HOST_A})
     assert detail.json()["reviews"] == {"count": 0, "average": None}
@@ -420,8 +410,12 @@ async def test_tenant_isolation(
         client, platform_headers, name="Agency B", slug="agency-b", domain=HOST_B
     )
     admin_b = await add_user(
-        client, create_tenant_user, str(tenant_b["id"]), Role.ADMIN,
-        email="admin@b.example.com", host=HOST_B,
+        client,
+        create_tenant_user,
+        str(tenant_b["id"]),
+        Role.ADMIN,
+        email="admin@b.example.com",
+        host=HOST_B,
     )
     listed = await client.get(PORTAL_REVIEWS, headers=admin_b)
     assert listed.status_code == 200

@@ -103,9 +103,7 @@ class Notification(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    type: Mapped[NotificationType] = mapped_column(
-        _str_enum(NotificationType, "notification_type")
-    )
+    type: Mapped[NotificationType] = mapped_column(_str_enum(NotificationType, "notification_type"))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     read_at: Mapped[datetime | None]
 
@@ -130,9 +128,7 @@ class NotificationPreference(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
-    type: Mapped[NotificationType] = mapped_column(
-        _str_enum(NotificationType, "notification_type")
-    )
+    type: Mapped[NotificationType] = mapped_column(_str_enum(NotificationType, "notification_type"))
     channel: Mapped[NotificationChannel] = mapped_column(
         _str_enum(NotificationChannel, "notification_channel")
     )

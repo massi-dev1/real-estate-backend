@@ -98,9 +98,7 @@ def upgrade() -> None:
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_neighborhood_guides")),
-        sa.UniqueConstraint(
-            "tenant_id", "slug", name="uq_neighborhood_guides_tenant_slug"
-        ),
+        sa.UniqueConstraint("tenant_id", "slug", name="uq_neighborhood_guides_tenant_slug"),
     )
     op.create_index(
         op.f("ix_neighborhood_guides_tenant_id"),
@@ -169,7 +167,5 @@ def downgrade() -> None:
     op.drop_table("market_reports")
 
     op.drop_index("ix_neighborhood_guides_boundary", table_name="neighborhood_guides")
-    op.drop_index(
-        op.f("ix_neighborhood_guides_tenant_id"), table_name="neighborhood_guides"
-    )
+    op.drop_index(op.f("ix_neighborhood_guides_tenant_id"), table_name="neighborhood_guides")
     op.drop_table("neighborhood_guides")

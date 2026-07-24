@@ -150,9 +150,7 @@ async def test_cookie_config_put_get_and_public_render(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    _, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     body = {
         "categories": [{"key": "analytics", "required": False, "defaultOn": False}],
         "bannerCopy": {"title": {"en": "We use cookies"}},
@@ -173,9 +171,7 @@ async def test_cookie_config_requires_compliance_manage(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    _, agent = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.AGENT
-    )
+    _, agent = await tenant_and_login(client, platform_headers, create_tenant_user, Role.AGENT)
     resp = await client.put(COOKIE_CONFIG, json={"categories": []}, headers=agent)
     assert resp.status_code == 403  # COMPLIANCE_MANAGE is admin-only
 
@@ -216,9 +212,7 @@ async def test_delete_me_soft_deletes_and_schedules_purge(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, _ = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, _ = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     buyer = await buyer_headers(client, "erase-me@example.com")
 
     resp = await client.delete(ME_DELETE, headers=buyer)
@@ -232,9 +226,7 @@ async def test_delete_me_soft_deletes_and_schedules_purge(
     # Idempotent: exactly one pending erasure exists.
     async with app.state.session_factory() as session, session.begin():
         await set_tenant_guc(session, uuid.UUID(str(tenant["id"])))
-        count = (
-            await session.execute(select(func.count()).select_from(DsrRequest))
-        ).scalar_one()
+        count = (await session.execute(select(func.count()).select_from(DsrRequest))).scalar_one()
     assert count == 1
 
 
@@ -244,9 +236,7 @@ async def test_erasure_purge_anonymizes_person_keeps_business_record(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, _ = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, _ = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     tid = uuid.UUID(str(tenant["id"]))
     email = "purge-me@example.com"
     buyer = await buyer_headers(client, email)
@@ -260,9 +250,7 @@ async def test_erasure_purge_anonymizes_person_keeps_business_record(
     async with app.state.session_factory() as session, session.begin():
         await set_tenant_guc(session, tid)
         await session.execute(
-            update(DsrRequest).values(
-                purge_scheduled_at=datetime.now(UTC) - timedelta(days=1)
-            )
+            update(DsrRequest).values(purge_scheduled_at=datetime.now(UTC) - timedelta(days=1))
         )
 
     purged = purge_due_erasures()
@@ -294,9 +282,7 @@ async def test_saved_search_signup_records_marketing_consent(
 
     from tests.test_favorites import mailpit_text, signup_body
 
-    tenant, _ = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, _ = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     email = "consent-signup@example.com"
     resp = await client.post(
         "/api/v1/saved-searches",
@@ -317,10 +303,10 @@ async def test_saved_search_signup_records_marketing_consent(
     async with app.state.session_factory() as session, session.begin():
         await set_tenant_guc(session, uuid.UUID(str(tenant["id"])))
         records = (
-            await session.execute(
-                select(ConsentRecord).where(ConsentRecord.email == email)
-            )
-        ).scalars().all()
+            (await session.execute(select(ConsentRecord).where(ConsentRecord.email == email)))
+            .scalars()
+            .all()
+        )
     assert len(records) == 1
     assert records[0].category.value == "marketing"
     assert records[0].granted is True
@@ -336,9 +322,7 @@ async def test_lost_lead_retention_anonymizes_after_cutoff(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, _ = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, _ = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     tid = uuid.UUID(str(tenant["id"]))
     resp = await capture(client, capture_body(email="stale-lost@example.com", source="other"))
     lead_id = resp.json()["id"]
@@ -375,9 +359,7 @@ async def test_audit_log_report_scoped_to_tenant(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    _, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     # Empty is a valid 200 (no audited actions on a fresh tenant).
     resp = await client.get(AUDIT_LOG, headers=admin)
     assert resp.status_code == 200, resp.text
@@ -393,15 +375,11 @@ async def test_export_is_tenant_isolated(
 ) -> None:
     # Two tenants, same buyer email — each export sees only its own tenant's rows.
     await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
-    await create_tenant(
-        client, platform_headers, name="Agency B", slug="agency-b", domain=HOST_B
-    )
+    await create_tenant(client, platform_headers, name="Agency B", slug="agency-b", domain=HOST_B)
 
     buyer_a = await buyer_headers(client, "shared@example.com", host=HOST_A)
     buyer_b = await buyer_headers(client, "shared@example.com", host=HOST_B)
-    await capture(
-        client, capture_body(email="shared@example.com", source="other"), host=HOST_A
-    )
+    await capture(client, capture_body(email="shared@example.com", source="other"), host=HOST_A)
 
     resp_a = await client.get(ME_EXPORT, headers=buyer_a)
     resp_b = await client.get(ME_EXPORT, headers=buyer_b)

@@ -89,9 +89,7 @@ def deliver_notification(
                 )
                 return
             email = SmtpEmailService(get_settings())
-            await email.send(
-                EmailMessage(to=to, subject=rendered.subject, text=rendered.body)
-            )
+            await email.send(EmailMessage(to=to, subject=rendered.subject, text=rendered.body))
             repo.log_send(
                 tid,
                 notification_id=nid,

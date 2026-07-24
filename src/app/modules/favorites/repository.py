@@ -53,9 +53,7 @@ class FavoritesRepository:
         limit: int,
     ) -> list[Favorite]:
         """Keyset page on (created_at DESC, id DESC); returns limit+1 rows."""
-        stmt = select(Favorite).where(
-            Favorite.tenant_id == tenant_id, Favorite.user_id == user_id
-        )
+        stmt = select(Favorite).where(Favorite.tenant_id == tenant_id, Favorite.user_id == user_id)
         if after is not None:
             stmt = stmt.where(
                 or_(
@@ -126,9 +124,7 @@ class FavoritesRepository:
     async def all_favorites_for_user(
         self, tenant_id: uuid.UUID, user_id: uuid.UUID
     ) -> list[Favorite]:
-        stmt = select(Favorite).where(
-            Favorite.tenant_id == tenant_id, Favorite.user_id == user_id
-        )
+        stmt = select(Favorite).where(Favorite.tenant_id == tenant_id, Favorite.user_id == user_id)
         return list((await self.session.execute(stmt)).scalars())
 
     async def delete_all_for_user(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> None:
@@ -136,9 +132,7 @@ class FavoritesRepository:
         these are personal preference rows with no business-record value to
         retain, unlike a CRM lead."""
         await self.session.execute(
-            delete(Favorite).where(
-                Favorite.tenant_id == tenant_id, Favorite.user_id == user_id
-            )
+            delete(Favorite).where(Favorite.tenant_id == tenant_id, Favorite.user_id == user_id)
         )
         await self.session.execute(
             delete(SavedSearch).where(

@@ -44,9 +44,7 @@ _DealGuard = require(Permission.DEAL_MANAGE)
 DealResponse = DealWithCommissionOut | DealOut
 
 
-def _deal_out(
-    deal: Deal, service: TransactionsService, actor: AuthenticatedUser
-) -> DealResponse:
+def _deal_out(deal: Deal, service: TransactionsService, actor: AuthenticatedUser) -> DealResponse:
     """An admin sees commission figures; everyone else gets the plain shape
     with no commission keys on the wire at all."""
     if service.can_see_commission(actor):

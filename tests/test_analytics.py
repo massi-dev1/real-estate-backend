@@ -49,9 +49,7 @@ async def _publish_listing(
     return str(listing["id"])
 
 
-async def _post_events(
-    client: AsyncClient, events: list[dict], *, host: str = HOST_A
-) -> None:
+async def _post_events(client: AsyncClient, events: list[dict], *, host: str = HOST_A) -> None:
     resp = await client.post(EVENTS_URL, json={"events": events}, headers={"Host": host})
     assert resp.status_code == 202, resp.text
     assert resp.json()["accepted"] == len(events)
@@ -60,9 +58,7 @@ async def _post_events(
 # ---- ingestion ----
 
 
-async def test_ingest_typed_events(
-    client: AsyncClient, platform_headers: dict[str, str]
-) -> None:
+async def test_ingest_typed_events(client: AsyncClient, platform_headers: dict[str, str]) -> None:
     await create_tenant(client, platform_headers, name="Agency A", slug="agency-a")
     await _post_events(
         client,
@@ -183,9 +179,7 @@ async def test_lead_funnel_and_source_dashboards(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    _, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     # Three captured leads today, two sources.
     r1 = await capture(client, capture_body(email="a@x.com", source="listing_form"))
     assert r1.status_code == 201, r1.text
@@ -217,9 +211,7 @@ async def test_listing_performance_scoped_to_agent(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="agent@a.example.com"
     )

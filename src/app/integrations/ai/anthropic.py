@@ -69,12 +69,8 @@ class AnthropicTextProvider:
         # 4xx (except 429) is a permanent config/request problem; 429 and 5xx
         # are transient — same classification the portal/billing adapters use.
         permanent = 400 <= response.status_code < 500 and response.status_code != 429
-        logger.warning(
-            "ai_provider_error", status=response.status_code, permanent=permanent
-        )
-        raise AIError(
-            f"AI provider returned {response.status_code}.", permanent=permanent
-        )
+        logger.warning("ai_provider_error", status=response.status_code, permanent=permanent)
+        raise AIError(f"AI provider returned {response.status_code}.", permanent=permanent)
 
     def _parse(self, body: dict[str, object]) -> TextGenerationResult:
         content = body.get("content")

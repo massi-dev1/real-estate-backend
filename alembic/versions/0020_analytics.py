@@ -99,10 +99,7 @@ def upgrade() -> None:
         """
     )
     # Per-tenant time-ordered reads (the rollup scans key on this).
-    op.execute(
-        f"CREATE INDEX ix_{_EVENTS}_tenant_created "
-        f"ON {_EVENTS} (tenant_id, created_at)"
-    )
+    op.execute(f"CREATE INDEX ix_{_EVENTS}_tenant_created ON {_EVENTS} (tenant_id, created_at)")
     op.execute(
         f"CREATE INDEX ix_{_EVENTS}_tenant_type_created "
         f"ON {_EVENTS} (tenant_id, event_type, created_at)"

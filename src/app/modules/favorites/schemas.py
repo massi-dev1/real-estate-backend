@@ -62,9 +62,7 @@ class SavedSearchUpdate(InputSchema):
     def known_locale(cls, value: str | None) -> str | None:
         return _validate_locale(value)
 
-    _reject_required_nulls = reject_null_for(
-        "name", "filters", "frequency", "is_active", "locale"
-    )
+    _reject_required_nulls = reject_null_for("name", "filters", "frequency", "is_active", "locale")
 
 
 class SavedSearchOut(OutSchema):

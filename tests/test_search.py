@@ -50,9 +50,7 @@ async def test_keyword_search_with_french_stemming(
     create_tenant_user: CreateTenantUser,
 ) -> None:
     _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
-    flat = await publish_listing(
-        client, admin, title={"fr": "Bel appartement lumineux au centre"}
-    )
+    flat = await publish_listing(client, admin, title={"fr": "Bel appartement lumineux au centre"})
     await publish_listing(client, admin, title={"fr": "Villa avec piscine et jardin"})
 
     # Plural query stems to the singular title ("appartements" → "appart").
@@ -97,9 +95,7 @@ async def test_features_filter_requires_all(
     page = await search(client, features=["balcony", "pool"])
     assert refs(page) == [both["referenceCode"]]
 
-    resp = await client.get(
-        "/api/v1/listings", params={"features": ["helipad"]}, headers=PUBLIC
-    )
+    resp = await client.get("/api/v1/listings", params={"features": ["helipad"]}, headers=PUBLIC)
     assert resp.status_code == 422
 
 
@@ -224,9 +220,7 @@ async def test_featured_leads_every_sort_and_is_manager_only(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     first = await publish_listing(client, admin)
     second = await publish_listing(client, admin)  # newest — would lead unsorted
 
@@ -292,9 +286,7 @@ async def test_map_clusters_beyond_pin_limit(
     # A country-scale viewport (span ≥ 5°) pins geohash precision to 3, whose
     # ~1.4° cells deterministically bucket the Algiers pair together and Oran
     # apart (cell boundaries fall at 2.8125° and 0° longitude).
-    resp = await client.get(
-        "/api/v1/listings/map", params={"inBbox": "-2,34,4,38"}, headers=PUBLIC
-    )
+    resp = await client.get("/api/v1/listings/map", params={"inBbox": "-2,34,4,38"}, headers=PUBLIC)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["clustered"] is True
@@ -331,9 +323,7 @@ async def test_detail_carries_json_ld(
     _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     listed = await publish_listing(client, admin)
 
-    resp = await client.get(
-        f"/api/v1/listings/{listed['referenceCode']}", headers=PUBLIC
-    )
+    resp = await client.get(f"/api/v1/listings/{listed['referenceCode']}", headers=PUBLIC)
     assert resp.status_code == 200, resp.text
     json_ld = resp.json()["jsonLd"]
     assert json_ld["@type"] == "RealEstateListing"

@@ -159,9 +159,7 @@ class AssignmentRule(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=AssignmentStrategy.LISTING_AGENT,
         server_default=AssignmentStrategy.LISTING_AGENT.value,
     )
-    config: Mapped[dict[str, Any]] = mapped_column(
-        default=dict, server_default=text("'{}'::jsonb")
-    )
+    config: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default=text("'{}'::jsonb"))
 
 
 class LeadDripState(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -59,9 +59,7 @@ def _list_active_tenants() -> list[tuple[uuid.UUID, TenantContext]]:
 # ---- erasure purge (§10.12) ----
 
 
-async def _purge_tenant(
-    session: AsyncSession, tenant: TenantContext, now: datetime
-) -> int:
+async def _purge_tenant(session: AsyncSession, tenant: TenantContext, now: datetime) -> int:
     service = build_compliance_service_for_worker(session)
     due = await service.repo.list_erasures_due(now=now)
     for dsr in due:
@@ -90,9 +88,7 @@ def purge_due_erasures() -> int:
 # ---- lost-lead retention (§8.17) ----
 
 
-async def _anonymize_tenant(
-    session: AsyncSession, tenant: TenantContext, now: datetime
-) -> int:
+async def _anonymize_tenant(session: AsyncSession, tenant: TenantContext, now: datetime) -> int:
     service = build_compliance_service_for_worker(session)
     return await service.anonymize_stale_lost_leads(tenant, now=now)
 

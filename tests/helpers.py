@@ -36,11 +36,7 @@ async def login_user(client: AsyncClient, host: str, email: str, password: str) 
 
 
 def bearer(resp_or_token: Response | str) -> str:
-    token = (
-        resp_or_token
-        if isinstance(resp_or_token, str)
-        else resp_or_token.json()["accessToken"]
-    )
+    token = resp_or_token if isinstance(resp_or_token, str) else resp_or_token.json()["accessToken"]
     return f"Bearer {token}"
 
 

@@ -47,7 +47,10 @@ async def _active_tenants(session: AsyncSession) -> list[Tenant]:
 
 def _to_context(tenant: Tenant) -> TenantContext:
     return TenantContext(
-        id=tenant.id, slug=tenant.slug, name=tenant.name, status=tenant.status.value,
+        id=tenant.id,
+        slug=tenant.slug,
+        name=tenant.name,
+        status=tenant.status.value,
         settings=tenant.settings,
     )
 

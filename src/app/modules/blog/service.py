@@ -48,8 +48,24 @@ EXCERPT_FALLBACK_CHARS = 200
 # script/style/on* handlers, javascript: URLs — no denylist needed. `rel` is
 # managed by link_rel, so it must NOT appear in the attribute allowlist.
 _ALLOWED_TAGS: frozenset[str] = frozenset(
-    {"p", "br", "strong", "em", "b", "i", "u", "ul", "ol", "li",
-     "h2", "h3", "h4", "blockquote", "a", "img"}
+    {
+        "p",
+        "br",
+        "strong",
+        "em",
+        "b",
+        "i",
+        "u",
+        "ul",
+        "ol",
+        "li",
+        "h2",
+        "h3",
+        "h4",
+        "blockquote",
+        "a",
+        "img",
+    }
 )
 _ALLOWED_ATTRS: dict[str, set[str]] = {
     "a": {"href", "title", "target"},
@@ -101,9 +117,7 @@ class BlogService:
 
     # ---- categories: portal ----
 
-    async def create_category(
-        self, tenant: TenantContext, data: CategoryCreate
-    ) -> BlogCategory:
+    async def create_category(self, tenant: TenantContext, data: CategoryCreate) -> BlogCategory:
         category = BlogCategory(tenant_id=tenant.id, slug=data.slug, name=data.name)
         self.repo.add(category)
         try:
@@ -112,9 +126,7 @@ class BlogService:
             raise ConflictError("A category with this slug already exists.") from exc
         return category
 
-    async def get_category(
-        self, tenant: TenantContext, category_id: uuid.UUID
-    ) -> BlogCategory:
+    async def get_category(self, tenant: TenantContext, category_id: uuid.UUID) -> BlogCategory:
         category = await self.repo.get_category(tenant.id, category_id)
         if category is None:
             raise NotFoundError("Category not found.")
@@ -144,9 +156,7 @@ class BlogService:
 
     async def create_post(self, tenant: TenantContext, data: PostCreate) -> BlogPost:
         await self._validate_category(tenant, data.category_id)
-        published_at = (
-            datetime.now(UTC) if data.status == BlogPostStatus.PUBLISHED else None
-        )
+        published_at = datetime.now(UTC) if data.status == BlogPostStatus.PUBLISHED else None
         post = BlogPost(
             tenant_id=tenant.id,
             slug=data.slug,
@@ -318,9 +328,7 @@ class BlogService:
         return _excerpt_from_body(post.body, locale)
 
     async def sitemap_posts(self, tenant: TenantContext) -> list[BlogPost]:
-        return await self.repo.published_posts_for_sitemap(
-            tenant.id, limit=BLOG_SITEMAP_MAX_POSTS
-        )
+        return await self.repo.published_posts_for_sitemap(tenant.id, limit=BLOG_SITEMAP_MAX_POSTS)
 
     async def rss_feed_posts(self, tenant: TenantContext) -> list[BlogPost]:
         return await self.repo.recent_published_for_rss(tenant.id, limit=RSS_MAX_ITEMS)

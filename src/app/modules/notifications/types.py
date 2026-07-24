@@ -108,15 +108,11 @@ TYPE_DEFINITIONS: dict[NotificationType, TypeDefinition] = {
         templates={
             "en": {
                 "subject": "Unassigned lead needs attention",
-                "body": (
-                    "Lead {leadId} has been unassigned for over {minutes} minutes."
-                ),
+                "body": ("Lead {leadId} has been unassigned for over {minutes} minutes."),
             },
             "fr": {
                 "subject": "Un prospect non attribué requiert votre attention",
-                "body": (
-                    "Le prospect {leadId} est non attribué depuis plus de {minutes} minutes."
-                ),
+                "body": ("Le prospect {leadId} est non attribué depuis plus de {minutes} minutes."),
             },
         },
     ),
@@ -173,8 +169,7 @@ TYPE_DEFINITIONS: dict[NotificationType, TypeDefinition] = {
             "en": {
                 "subject": "Deal milestone due: {milestoneTitle}",
                 "body": (
-                    'The milestone "{milestoneTitle}" on deal "{dealTitle}" '
-                    "is due on {dueDate}."
+                    'The milestone "{milestoneTitle}" on deal "{dealTitle}" is due on {dueDate}.'
                 ),
             },
             "fr": {

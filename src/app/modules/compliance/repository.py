@@ -82,9 +82,7 @@ class ComplianceRepository:
     # ---- DSR requests ----
 
     async def get_dsr(self, tenant_id: uuid.UUID, dsr_id: uuid.UUID) -> DsrRequest | None:
-        stmt = select(DsrRequest).where(
-            DsrRequest.tenant_id == tenant_id, DsrRequest.id == dsr_id
-        )
+        stmt = select(DsrRequest).where(DsrRequest.tenant_id == tenant_id, DsrRequest.id == dsr_id)
         return (await self.session.execute(stmt)).scalars().first()
 
     async def pending_erasure_for_user(

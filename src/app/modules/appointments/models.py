@@ -44,9 +44,7 @@ class AgentAvailability(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         # A row is either weekly-template (day_of_week) or a dated exception —
         # never both, never neither.
-        CheckConstraint(
-            "(day_of_week IS NULL) != (date IS NULL)", name="weekly_xor_exception"
-        ),
+        CheckConstraint("(day_of_week IS NULL) != (date IS NULL)", name="weekly_xor_exception"),
         CheckConstraint("start_time < end_time", name="start_before_end"),
         CheckConstraint(
             "day_of_week IS NULL OR (day_of_week BETWEEN 0 AND 6)", name="day_of_week_range"

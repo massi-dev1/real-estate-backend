@@ -147,9 +147,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_deals")),
     )
     op.create_index(op.f("ix_deals_tenant_id"), "deals", ["tenant_id"], unique=False)
-    op.create_index(
-        op.f("ix_deals_owner_user_id"), "deals", ["owner_user_id"], unique=False
-    )
+    op.create_index(op.f("ix_deals_owner_user_id"), "deals", ["owner_user_id"], unique=False)
     # Covering index for the portal list (scope by owner, filter by status,
     # keyset on created_at).
     op.create_index(
@@ -250,9 +248,7 @@ def upgrade() -> None:
     op.create_index(
         op.f("ix_deal_documents_tenant_id"), "deal_documents", ["tenant_id"], unique=False
     )
-    op.create_index(
-        op.f("ix_deal_documents_deal_id"), "deal_documents", ["deal_id"], unique=False
-    )
+    op.create_index(op.f("ix_deal_documents_deal_id"), "deal_documents", ["deal_id"], unique=False)
 
     for table in _TENANT_TABLES:
         for stmt in enable_tenant_rls_sql(table):
@@ -268,9 +264,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_deal_documents_tenant_id"), table_name="deal_documents")
     op.drop_table("deal_documents")
 
-    op.drop_index(
-        "ix_deal_milestones_tenant_due_pending", table_name="deal_milestones"
-    )
+    op.drop_index("ix_deal_milestones_tenant_due_pending", table_name="deal_milestones")
     op.drop_index(op.f("ix_deal_milestones_deal_id"), table_name="deal_milestones")
     op.drop_index(op.f("ix_deal_milestones_tenant_id"), table_name="deal_milestones")
     op.drop_table("deal_milestones")

@@ -42,9 +42,7 @@ def upgrade() -> None:
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
         sa.Column("user_id", sa.Uuid(), nullable=False),
         sa.Column("slug", sa.String(length=120), nullable=False),
-        sa.Column(
-            "bio", postgresql.JSONB(), server_default=sa.text("'{}'::jsonb"), nullable=False
-        ),
+        sa.Column("bio", postgresql.JSONB(), server_default=sa.text("'{}'::jsonb"), nullable=False),
         sa.Column(
             "specialties",
             postgresql.JSONB(),
@@ -188,9 +186,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_team_members")),
         sa.UniqueConstraint("team_id", "user_id", name=op.f("uq_team_members_team_id_user_id")),
     )
-    op.create_index(
-        op.f("ix_team_members_tenant_id"), "team_members", ["tenant_id"], unique=False
-    )
+    op.create_index(op.f("ix_team_members_tenant_id"), "team_members", ["tenant_id"], unique=False)
     op.create_index(op.f("ix_team_members_user_id"), "team_members", ["user_id"], unique=False)
 
     for table in ("agent_profiles", "teams", "team_members"):

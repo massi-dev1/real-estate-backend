@@ -85,9 +85,7 @@ class Review(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=ReviewStatus.PENDING.value,
     )
     # Set by the moderator on approval (or a future verified-client path).
-    is_verified: Mapped[bool] = mapped_column(
-        Boolean, default=False, server_default=text("false")
-    )
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     moderated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )

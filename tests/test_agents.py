@@ -47,16 +47,12 @@ async def login_headers(client: AsyncClient, email: str) -> dict[str, str]:
 async def make_profile(
     client: AsyncClient, headers: dict[str, str], **overrides: Any
 ) -> dict[str, Any]:
-    resp = await client.post(
-        PORTAL_AGENTS, json={**PROFILE_BODY, **overrides}, headers=headers
-    )
+    resp = await client.post(PORTAL_AGENTS, json={**PROFILE_BODY, **overrides}, headers=headers)
     assert resp.status_code == 201, resp.text
     return dict(resp.json())
 
 
-async def publish_profile(
-    client: AsyncClient, admin: dict[str, str], profile_id: str
-) -> None:
+async def publish_profile(client: AsyncClient, admin: dict[str, str], profile_id: str) -> None:
     resp = await client.patch(
         f"{PORTAL_AGENTS}/{profile_id}", json={"isPublished": True}, headers=admin
     )
@@ -145,12 +141,13 @@ async def test_profile_ownership_and_permission_gates(
 
     # A buyer can't have a profile; a duplicate slug/user conflicts.
     buyer = await add_user(
-        client, create_tenant_user, str(tenant["id"]), Role.BUYER_RENTER,
+        client,
+        create_tenant_user,
+        str(tenant["id"]),
+        Role.BUYER_RENTER,
         email="buyer@a.example.com",
     )
-    assert (
-        await client.post(PORTAL_AGENTS, json=PROFILE_BODY, headers=buyer)
-    ).status_code == 409
+    assert (await client.post(PORTAL_AGENTS, json=PROFILE_BODY, headers=buyer)).status_code == 409
     dup_user = await client.post(
         PORTAL_AGENTS, json={**PROFILE_BODY, "slug": "other-slug"}, headers=agent_one
     )
@@ -328,9 +325,7 @@ async def test_team_crud_and_membership_rules(
     lead_two = await login_headers(client, "lead2@a.example.com")
     agent = await login_headers(client, "agent@a.example.com")
 
-    added = await client.post(
-        f"{team_url}/members", json={"userId": str(tl_two)}, headers=lead_one
-    )
+    added = await client.post(f"{team_url}/members", json={"userId": str(tl_two)}, headers=lead_one)
     assert added.status_code == 201, added.text
     assert (
         await client.post(f"{team_url}/members", json={"userId": str(tl_two)}, headers=lead_two)
@@ -489,9 +484,7 @@ async def test_territory_assignment_matches_listing_point(
     # A listing inside the ring (Algiers) routes its lead to the agent.
     inside = await make_listing(client, admin, agentId=None)
     assert (await transition(client, admin, inside["id"], "published")).status_code == 200
-    captured = await capture(
-        client, capture_body(email="in@example.com", listingId=inside["id"])
-    )
+    captured = await capture(client, capture_body(email="in@example.com", listingId=inside["id"]))
     assert captured.status_code == 201, captured.text
     got = await client.get(f"/api/v1/portal/leads/{captured.json()['id']}", headers=admin)
     assert got.status_code == 200
@@ -501,9 +494,7 @@ async def test_territory_assignment_matches_listing_point(
     # A listing outside every service area stays unassigned.
     outside = await make_listing(client, admin, agentId=None, location=ORAN_POINT)
     assert (await transition(client, admin, outside["id"], "published")).status_code == 200
-    captured = await capture(
-        client, capture_body(email="out@example.com", listingId=outside["id"])
-    )
+    captured = await capture(client, capture_body(email="out@example.com", listingId=outside["id"]))
     assert captured.status_code == 201
     got = await client.get(f"/api/v1/portal/leads/{captured.json()['id']}", headers=admin)
     assert got.json()["agentId"] is None
@@ -529,9 +520,7 @@ async def test_agent_stats_slice(
     profile = await make_profile(client, agent)
     listing = await make_listing(client, agent)
     assert (await transition(client, admin, listing["id"], "published")).status_code == 200
-    captured = await capture(
-        client, capture_body(email="s@example.com", listingId=listing["id"])
-    )
+    captured = await capture(client, capture_body(email="s@example.com", listingId=listing["id"]))
     assert captured.status_code == 201
 
     stats = await client.get(f"{PORTAL_AGENTS}/{profile['id']}/stats", headers=agent)

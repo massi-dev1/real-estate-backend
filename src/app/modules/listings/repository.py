@@ -74,9 +74,7 @@ class ListingRepository:
         stmt = select(Listing).where(Listing.tenant_id == tenant_id, Listing.deleted_at.is_(None))
         if scope_user_ids is not None:
             ids = list(scope_user_ids)
-            stmt = stmt.where(
-                or_(Listing.agent_id.in_(ids), Listing.created_by.in_(ids))
-            )
+            stmt = stmt.where(or_(Listing.agent_id.in_(ids), Listing.created_by.in_(ids)))
         return stmt
 
     async def get(
@@ -90,9 +88,7 @@ class ListingRepository:
         """``for_update`` locks the row — required by every read-validate-write
         flow (workflow transitions, delete) so concurrent requests re-validate
         against the committed state instead of a stale read."""
-        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).where(
-            Listing.id == listing_id
-        )
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).where(Listing.id == listing_id)
         if for_update:
             stmt = stmt.with_for_update()
         return (await self.session.execute(stmt)).scalar_one_or_none()
@@ -153,9 +149,7 @@ class ListingRepository:
         if filters.area_min is not None:
             stmt = stmt.where(Listing.area_built >= filters.area_min)
         if filters.city is not None:
-            stmt = stmt.where(
-                func.lower(Listing.address["city"].astext) == filters.city.lower()
-            )
+            stmt = stmt.where(func.lower(Listing.address["city"].astext) == filters.city.lower())
         if filters.features:
             # JSONB containment (@>) — served by the GIN index on features.
             stmt = stmt.where(Listing.features.contains(filters.features))
@@ -237,9 +231,7 @@ class ListingRepository:
         ).limit(limit + 1)
         return list((await self.session.execute(stmt)).scalars())
 
-    def _within_boundary(
-        self, tenant_id: uuid.UUID, polygon_wkt: str
-    ) -> Select[tuple[Listing]]:
+    def _within_boundary(self, tenant_id: uuid.UUID, polygon_wkt: str) -> Select[tuple[Listing]]:
         """Published rows whose point falls inside a MultiPolygon. MakeValid +
         CollectionExtract(3) so a self-intersecting drawn boundary degrades to
         its valid polygon parts instead of erroring (same stance as Part 7's
@@ -247,13 +239,10 @@ class ListingRepository:
         polygon = func.ST_CollectionExtract(
             func.ST_MakeValid(func.ST_GeomFromText(polygon_wkt, 4326)), 3
         )
-        return (
-            self._base(tenant_id)
-            .where(
-                Listing.status == ListingStatus.PUBLISHED,
-                Listing.location.is_not(None),
-                func.ST_Contains(polygon, Listing.location),
-            )
+        return self._base(tenant_id).where(
+            Listing.status == ListingStatus.PUBLISHED,
+            Listing.location.is_not(None),
+            func.ST_Contains(polygon, Listing.location),
         )
 
     async def list_published_within(
@@ -423,9 +412,7 @@ class ListingRepository:
         scope_user_ids: Collection[uuid.UUID] | None = None,
         status: ListingStatus | None = None,
     ) -> int:
-        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).with_only_columns(
-            func.count()
-        )
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).with_only_columns(func.count())
         if status is not None:
             stmt = stmt.where(Listing.status == status)
         return (await self.session.execute(stmt)).scalar_one()
@@ -435,9 +422,7 @@ class ListingRepository:
     ) -> list[uuid.UUID]:
         """Ids of every (non-deleted) listing in the actor's scope — ``None``
         scope = tenant-wide. Backs the per-listing analytics report (§8.15)."""
-        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).with_only_columns(
-            Listing.id
-        )
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).with_only_columns(Listing.id)
         return list((await self.session.execute(stmt)).scalars())
 
     async def list_published_by_agent(
@@ -447,12 +432,8 @@ class ListingRepository:
         (``created_by`` is back-office provenance, not public attribution)."""
         stmt = (
             self._base(tenant_id)
-            .where(
-                Listing.status == ListingStatus.PUBLISHED, Listing.agent_id == agent_user_id
-            )
-            .order_by(
-                Listing.featured.desc(), Listing.published_at.desc(), Listing.id.desc()
-            )
+            .where(Listing.status == ListingStatus.PUBLISHED, Listing.agent_id == agent_user_id)
+            .order_by(Listing.featured.desc(), Listing.published_at.desc(), Listing.id.desc())
             .limit(limit)
         )
         return list((await self.session.execute(stmt)).scalars())

@@ -56,9 +56,7 @@ class UsageRepository:
             .values(tenant_id=tenant_id)
             .on_conflict_do_nothing(index_elements=["tenant_id"])
         )
-        stmt = (
-            select(TenantUsage).where(TenantUsage.tenant_id == tenant_id).with_for_update()
-        )
+        stmt = select(TenantUsage).where(TenantUsage.tenant_id == tenant_id).with_for_update()
         return (await self.session.execute(stmt)).scalar_one()
 
     async def adjust(
@@ -139,9 +137,7 @@ class UsageService:
         limit = plan_limits(plan).max_listings
         row = await self.repo.get_for_update(tenant_id)
         if limit is not None and row.listings_count >= limit:
-            raise QuotaExceededError(
-                "Your plan's listing limit has been reached.", limit=limit
-            )
+            raise QuotaExceededError("Your plan's listing limit has been reached.", limit=limit)
         await self.repo.adjust(tenant_id, listings=1)
 
     async def release_listings(self, tenant_id: uuid.UUID, count: int = 1) -> None:
@@ -151,9 +147,7 @@ class UsageService:
         limit = plan_limits(plan).max_agents
         row = await self.repo.get_for_update(tenant_id)
         if limit is not None and row.agents_count >= limit:
-            raise QuotaExceededError(
-                "Your plan's agent limit has been reached.", limit=limit
-            )
+            raise QuotaExceededError("Your plan's agent limit has been reached.", limit=limit)
         await self.repo.adjust(tenant_id, agents=1)
 
     async def release_agents(self, tenant_id: uuid.UUID, count: int = 1) -> None:

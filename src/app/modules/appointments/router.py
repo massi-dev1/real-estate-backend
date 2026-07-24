@@ -116,9 +116,7 @@ async def get_appointment(
     service: AppointmentsServiceDep,
     actor: AuthenticatedUser = Depends(require(Permission.APPOINTMENT_MANAGE)),
 ) -> AppointmentOut:
-    return AppointmentOut.model_validate(
-        await service.get_portal(tenant, actor, appointment_id)
-    )
+    return AppointmentOut.model_validate(await service.get_portal(tenant, actor, appointment_id))
 
 
 @portal_router.post("/appointments/{appointment_id}/status")

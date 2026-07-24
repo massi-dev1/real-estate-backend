@@ -157,9 +157,7 @@ class AppointmentsService:
         _, _, tz = _tenant_appointment_settings(tenant)
         today = datetime.now(tz).date()
         if day < today or day > today + timedelta(days=MAX_BOOKING_DAYS_AHEAD):
-            raise ConflictError(
-                f"Tours can be booked up to {MAX_BOOKING_DAYS_AHEAD} days ahead."
-            )
+            raise ConflictError(f"Tours can be booked up to {MAX_BOOKING_DAYS_AHEAD} days ahead.")
 
     async def _free_slots(
         self, tenant: TenantContext, agent_user_id: uuid.UUID, day: date
@@ -182,9 +180,7 @@ class AppointmentsService:
             if not r.is_block
         ]
         blocks = [
-            self._window_utc(day, r.start_time, r.end_time, tz)
-            for r in exceptions
-            if r.is_block
+            self._window_utc(day, r.start_time, r.end_time, tz) for r in exceptions if r.is_block
         ]
         if not open_windows:
             return []
@@ -216,9 +212,7 @@ class AppointmentsService:
         return slots
 
     @staticmethod
-    def _window_utc(
-        day: date, start: time, end: time, tz: tzinfo
-    ) -> tuple[datetime, datetime]:
+    def _window_utc(day: date, start: time, end: time, tz: tzinfo) -> tuple[datetime, datetime]:
         return (
             datetime.combine(day, start, tzinfo=tz).astimezone(UTC),
             datetime.combine(day, end, tzinfo=tz).astimezone(UTC),
@@ -436,9 +430,7 @@ class AppointmentsService:
             since=datetime.now(UTC) - ICAL_LOOKBACK,
             limit=ICAL_MAX_EVENTS,
         )
-        contacts = await self.leads.contacts_by_ids(
-            tenant.id, [a.contact_id for a in appointments]
-        )
+        contacts = await self.leads.contacts_by_ids(tenant.id, [a.contact_id for a in appointments])
 
         # icalendar ships py.typed but leaves Component.__init__ untyped —
         # the constructors need scoped ignores under strict mypy.

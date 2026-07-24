@@ -258,9 +258,7 @@ class ComplianceService:
 
     # ---- data-subject requests: export (§10.12) ----
 
-    async def export_for_user(
-        self, tenant: TenantContext, user_id: uuid.UUID
-    ) -> dict[str, object]:
+    async def export_for_user(self, tenant: TenantContext, user_id: uuid.UUID) -> dict[str, object]:
         """Aggregate the subject's data read-only across every module holding a
         ``user_id`` / ``contact_id`` for them (§10.12). Each section is one
         module's own boundary dump — never a raw cross-module table read."""
@@ -318,9 +316,7 @@ class ComplianceService:
             "dsr_erasure_requested",
             tenant_id=str(tenant.id),
             user_id=str(user_id),
-            purge_at=request.purge_scheduled_at.isoformat()
-            if request.purge_scheduled_at
-            else None,
+            purge_at=request.purge_scheduled_at.isoformat() if request.purge_scheduled_at else None,
         )
         return request
 
@@ -344,9 +340,7 @@ class ComplianceService:
         # 2. Anonymize CRM contacts tied to that email (keep leads/activities).
         email = original_email or dsr.subject_email
         if email:
-            result["contacts_anonymized"] = await self.leads.anonymize_subject(
-                tenant.id, email
-            )
+            result["contacts_anonymized"] = await self.leads.anonymize_subject(tenant.id, email)
         # 3. Hard-delete preference rows.
         await self.favorites.erase_for_user(tenant, dsr.user_id)
         await self.notifications.erase_for_user(tenant, dsr.user_id)

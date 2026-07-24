@@ -114,9 +114,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("tenant_id", "slug", name="uq_blog_posts_tenant_slug"),
     )
     op.create_index(op.f("ix_blog_posts_tenant_id"), "blog_posts", ["tenant_id"], unique=False)
-    op.create_index(
-        op.f("ix_blog_posts_category_id"), "blog_posts", ["category_id"], unique=False
-    )
+    op.create_index(op.f("ix_blog_posts_category_id"), "blog_posts", ["category_id"], unique=False)
     op.create_index(
         "ix_blog_posts_tenant_status_published",
         "blog_posts",

@@ -85,9 +85,7 @@ class ConsentRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # ``user_id`` is SET NULL on account deletion — the *consent proof* must
     # survive the account it was tied to (an agency has to prove consent even
     # after erasure), so the record is de-linked, not cascade-deleted.
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     email: Mapped[str | None] = mapped_column(String(320), index=True)
     category: Mapped[ConsentCategory] = mapped_column(
         _str_enum(ConsentCategory, "consent_category")
@@ -143,9 +141,7 @@ class CookieConsentConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         default=dict, server_default=text("'{}'::jsonb")
     )
     # When enabled, the banner is shown; a tenant can disable it entirely.
-    is_enabled: Mapped[bool] = mapped_column(
-        Boolean, default=True, server_default=text("true")
-    )
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
 
 
 class DsrRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -158,9 +154,7 @@ class DsrRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     # The requesting account. SET NULL: an erasure purge removes the account but
     # the DSR record (proof the request was honoured) survives, de-linked.
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("users.id", ondelete="SET NULL")
-    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     # Denormalised so the record is meaningful after the user row is gone.
     subject_email: Mapped[str | None] = mapped_column(String(320))
     kind: Mapped[DsrKind] = mapped_column(_str_enum(DsrKind, "dsr_kind"))
@@ -174,7 +168,5 @@ class DsrRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     completed_at: Mapped[datetime | None]
     # What the erasure sweep did, for the audit trail: {leads_anonymized: N,
     # deals_retained: N, ...}.
-    result: Mapped[dict[str, Any]] = mapped_column(
-        default=dict, server_default=text("'{}'::jsonb")
-    )
+    result: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default=text("'{}'::jsonb"))
     ip: Mapped[str | None] = mapped_column(String(45))

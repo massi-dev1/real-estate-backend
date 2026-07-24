@@ -133,9 +133,7 @@ class NotificationsService:
         definition = definition_for(type)
         data = dict(payload)
 
-        notification = Notification(
-            tenant_id=tenant.id, user_id=user_id, type=type, payload=data
-        )
+        notification = Notification(tenant_id=tenant.id, user_id=user_id, type=type, payload=data)
         self.repo.add(notification)
         await self.repo.flush()
         notification_id = notification.id
@@ -274,9 +272,7 @@ class NotificationsService:
 
     # ---- compliance boundary (§8.17): DSR export + erasure ----
 
-    async def export_for_user(
-        self, tenant: TenantContext, user_id: uuid.UUID
-    ) -> dict[str, object]:
+    async def export_for_user(self, tenant: TenantContext, user_id: uuid.UUID) -> dict[str, object]:
         """Read-only dump of a user's in-app notifications (§10.12)."""
         rows = await self.repo.list_for_user(
             tenant.id, user_id, unread_only=False, after=None, limit=1000
@@ -336,9 +332,7 @@ class NotificationsService:
         return await self.get_preferences(tenant, user_id)
 
 
-def _next_cursor(
-    rows: list[Notification], items: list[Notification], page_size: int
-) -> str | None:
+def _next_cursor(rows: list[Notification], items: list[Notification], page_size: int) -> str | None:
     if len(rows) <= page_size:
         return None
     last = items[-1]
@@ -367,6 +361,4 @@ def build_notifications_boundary(
     return NotificationsService(NotificationsRepository(session), redis)
 
 
-NotificationsServiceDep = Annotated[
-    NotificationsService, Depends(get_notifications_service)
-]
+NotificationsServiceDep = Annotated[NotificationsService, Depends(get_notifications_service)]

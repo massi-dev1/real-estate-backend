@@ -26,9 +26,7 @@ class UserStatus(enum.StrEnum):
 
 class User(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "users"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "email", postgresql_nulls_not_distinct=True),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "email", postgresql_nulls_not_distinct=True),)
 
     tenant_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True

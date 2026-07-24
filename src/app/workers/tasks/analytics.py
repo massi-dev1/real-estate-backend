@@ -67,6 +67,7 @@ def rollup_analytics() -> int:
 def prune_analytics_events() -> list[str]:
     """Drop month partitions older than the retention window. Unscoped — a
     partitioned parent's structure is global, not tenant-scoped."""
+
     async def _prune(session: AsyncSession) -> list[str]:
         service = build_analytics_service_for_worker(session)
         return await service.prune_raw_events()
@@ -81,6 +82,7 @@ def prune_analytics_events() -> list[str]:
 def ensure_analytics_partitions() -> list[str]:
     """Create the current + next months' partitions if missing (create-ahead).
     Unscoped, idempotent (``CREATE TABLE IF NOT EXISTS``)."""
+
     async def _ensure(session: AsyncSession) -> list[str]:
         service = build_analytics_service_for_worker(session)
         return await service.ensure_partitions()

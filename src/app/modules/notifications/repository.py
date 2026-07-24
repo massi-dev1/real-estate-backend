@@ -40,9 +40,7 @@ class NotificationsRepository:
         the audit record of what was attempted."""
         for model in (Notification, NotificationPreference, NotificationDigestItem):
             await self.session.execute(
-                delete(model).where(
-                    model.tenant_id == tenant_id, model.user_id == user_id
-                )
+                delete(model).where(model.tenant_id == tenant_id, model.user_id == user_id)
             )
 
     # ---- in-app notifications ----
@@ -106,9 +104,7 @@ class NotificationsRepository:
         )
         return (await self.session.execute(stmt)).scalar_one()
 
-    async def mark_all_read(
-        self, tenant_id: uuid.UUID, user_id: uuid.UUID, now: datetime
-    ) -> None:
+    async def mark_all_read(self, tenant_id: uuid.UUID, user_id: uuid.UUID, now: datetime) -> None:
         stmt = (
             update(Notification)
             .where(

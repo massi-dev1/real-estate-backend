@@ -89,6 +89,4 @@ class SavedSearch(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Digest watermark: only listings published after this are "new".
     last_run_at: Mapped[datetime | None]
     # Anonymous signups start inactive until the double-opt-in confirm (§8.9).
-    is_active: Mapped[bool] = mapped_column(
-        Boolean, default=True, server_default=text("true")
-    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))

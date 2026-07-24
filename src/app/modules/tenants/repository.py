@@ -130,9 +130,7 @@ class TenantRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def list_grace_expired_subscriptions(
-        self, *, now: datetime
-    ) -> list[TenantSubscription]:
+    async def list_grace_expired_subscriptions(self, *, now: datetime) -> list[TenantSubscription]:
         """Past-due subscriptions whose dunning grace window has closed — the
         dunning sweep suspends their tenants."""
         stmt = select(TenantSubscription).where(

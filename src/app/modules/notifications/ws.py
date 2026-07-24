@@ -26,19 +26,13 @@ def _ticket_key(ticket: str) -> str:
     return f"notify:ws-ticket:{ticket}"
 
 
-async def mint_ws_ticket(
-    redis: Redis, *, tenant_id: uuid.UUID, user_id: uuid.UUID
-) -> str:
+async def mint_ws_ticket(redis: Redis, *, tenant_id: uuid.UUID, user_id: uuid.UUID) -> str:
     ticket = secrets.token_urlsafe(32)
-    await redis.set(
-        _ticket_key(ticket), f"{tenant_id}:{user_id}", ex=WS_TICKET_TTL_SECONDS
-    )
+    await redis.set(_ticket_key(ticket), f"{tenant_id}:{user_id}", ex=WS_TICKET_TTL_SECONDS)
     return ticket
 
 
-async def redeem_ws_ticket(
-    redis: Redis, ticket: str, *, tenant_id: uuid.UUID
-) -> uuid.UUID | None:
+async def redeem_ws_ticket(redis: Redis, ticket: str, *, tenant_id: uuid.UUID) -> uuid.UUID | None:
     """Single-use: consume the ticket and return its user id iff it was minted
     for this tenant. ``GETDEL`` makes it non-replayable."""
     raw = await redis.getdel(_ticket_key(ticket))

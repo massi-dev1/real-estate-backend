@@ -132,9 +132,7 @@ def upgrade() -> None:
         ["tenant_id", sa.text("lower(email)")],
         unique=False,
     )
-    op.create_index(
-        "ix_contacts_tenant_phone", "contacts", ["tenant_id", "phone"], unique=False
-    )
+    op.create_index("ix_contacts_tenant_phone", "contacts", ["tenant_id", "phone"], unique=False)
 
     op.create_table(
         "leads",
@@ -264,9 +262,7 @@ def upgrade() -> None:
         "assignment_rules",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("tenant_id", sa.Uuid(), nullable=False),
-        sa.Column(
-            "strategy", ASSIGNMENT_STRATEGY, server_default="listing_agent", nullable=False
-        ),
+        sa.Column("strategy", ASSIGNMENT_STRATEGY, server_default="listing_agent", nullable=False),
         sa.Column(
             "config", postgresql.JSONB(), server_default=sa.text("'{}'::jsonb"), nullable=False
         ),

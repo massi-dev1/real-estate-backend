@@ -115,8 +115,7 @@ class AgentsService:
     ) -> AgentProfile:
         profile = await self.repo.get(tenant.id, profile_id, for_update=for_update)
         if profile is None or not (
-            profile.user_id == actor.id
-            or await self._can_manage_profile(tenant.id, actor, profile)
+            profile.user_id == actor.id or await self._can_manage_profile(tenant.id, actor, profile)
         ):
             # 404 for both "doesn't exist" and "not yours" — no existence oracle.
             raise NotFoundError("Agent profile not found.")
@@ -126,9 +125,7 @@ class AgentsService:
         try:
             await self.repo.flush()
         except IntegrityError as exc:
-            raise ConflictError(
-                "An agent profile with this slug or user already exists."
-            ) from exc
+            raise ConflictError("An agent profile with this slug or user already exists.") from exc
 
     def _photo_objects(self, profile: AgentProfile) -> list[list[str]]:
         objects: list[list[str]] = []
@@ -173,9 +170,7 @@ class AgentsService:
             slug=data.slug,
             bio=data.bio or {},
             specialties=data.specialties,
-            service_areas=(
-                to_multipolygon(data.service_areas) if data.service_areas else None
-            ),
+            service_areas=(to_multipolygon(data.service_areas) if data.service_areas else None),
             license_no=data.license_no,
             whatsapp_number=data.whatsapp_number,
             socials=data.socials or {},
@@ -334,9 +329,7 @@ class AgentsService:
     async def has_territory_data(self, tenant_id: uuid.UUID) -> bool:
         return await self.repo.any_territory_profile(tenant_id)
 
-    async def published_user_id_for_slug(
-        self, tenant_id: uuid.UUID, slug: str
-    ) -> uuid.UUID | None:
+    async def published_user_id_for_slug(self, tenant_id: uuid.UUID, slug: str) -> uuid.UUID | None:
         """The user id behind a *published* agent slug — the review module's
         target resolver (§8.11). ``None`` when the slug is unknown or the
         profile isn't published, so a review can't be attached to a hidden
@@ -344,9 +337,7 @@ class AgentsService:
         profile = await self.repo.get_published_by_slug(tenant_id, slug)
         return profile.user_id if profile is not None else None
 
-    async def whatsapp_number_for(
-        self, tenant_id: uuid.UUID, user_id: uuid.UUID
-    ) -> str | None:
+    async def whatsapp_number_for(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> str | None:
         """The agent's WhatsApp number (E.164) for leads' wa.me handoff —
         ``None`` when the user has no profile or hasn't set one (the caller
         falls back to the tenant-level default)."""
@@ -366,9 +357,7 @@ class AgentsService:
             return {actor.id} | await self.team_scope_user_ids(tenant_id, actor.id)
         return {actor.id}
 
-    async def team_scope_user_ids(
-        self, tenant_id: uuid.UUID, user_id: uuid.UUID
-    ) -> set[uuid.UUID]:
+    async def team_scope_user_ids(self, tenant_id: uuid.UUID, user_id: uuid.UUID) -> set[uuid.UUID]:
         """Members of every team the user leads (excluding the user) — the
         §8.5 team-scoped visibility source for listings and leads."""
         members = await self.repo.led_team_member_user_ids(tenant_id, user_id)

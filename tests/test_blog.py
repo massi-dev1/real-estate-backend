@@ -171,9 +171,7 @@ async def test_scheduled_post_requires_future_time(
     assert ok.status_code == 201, ok.text
     assert ok.json()["status"] == "scheduled"
 
-    hidden = await client.get(
-        "/api/v1/blog/posts/market-trends-2026", headers={"Host": HOST_A}
-    )
+    hidden = await client.get("/api/v1/blog/posts/market-trends-2026", headers={"Host": HOST_A})
     assert hidden.status_code == 404
 
 
@@ -210,13 +208,9 @@ async def test_scheduled_publish_sweep_flips_due_posts(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     future = (datetime.now(UTC) + timedelta(days=1)).isoformat()
-    post = await make_post(
-        client, admin, status="scheduled", scheduledAt=future
-    )
+    post = await make_post(client, admin, status="scheduled", scheduledAt=future)
 
     # Backdate scheduled_at into the past directly — the API rejects a past
     # scheduledAt, and there is no other way to make a row "due". RLS-protected,
@@ -248,9 +242,7 @@ async def test_public_post_negotiated_and_only_published(
     post = await make_post(client, admin)
 
     # Draft is invisible.
-    draft = await client.get(
-        "/api/v1/blog/posts/market-trends-2026", headers={"Host": HOST_A}
-    )
+    draft = await client.get("/api/v1/blog/posts/market-trends-2026", headers={"Host": HOST_A})
     assert draft.status_code == 404
 
     await client.post(f"{PORTAL_POSTS}/{post['id']}/publish", headers=admin)
@@ -296,9 +288,7 @@ async def test_tag_and_category_filtering(
     _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     category = await make_category(client, admin)
 
-    p1 = await make_post(
-        client, admin, slug="p1", tags=["market"], categoryId=category["id"]
-    )
+    p1 = await make_post(client, admin, slug="p1", tags=["market"], categoryId=category["id"])
     p2 = await make_post(client, admin, slug="p2", tags=["design"])
     for p in (p1, p2):
         await client.post(f"{PORTAL_POSTS}/{p['id']}/publish", headers=admin)

@@ -32,9 +32,7 @@ class BlogRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def get_category_by_slug(
-        self, tenant_id: uuid.UUID, slug: str
-    ) -> BlogCategory | None:
+    async def get_category_by_slug(self, tenant_id: uuid.UUID, slug: str) -> BlogCategory | None:
         stmt = select(BlogCategory).where(
             BlogCategory.tenant_id == tenant_id, BlogCategory.slug == slug
         )
@@ -58,9 +56,7 @@ class BlogRepository:
         stmt = select(BlogPost).where(BlogPost.tenant_id == tenant_id, BlogPost.id == post_id)
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def get_published_post_by_slug(
-        self, tenant_id: uuid.UUID, slug: str
-    ) -> BlogPost | None:
+    async def get_published_post_by_slug(self, tenant_id: uuid.UUID, slug: str) -> BlogPost | None:
         stmt = (
             select(BlogPost)
             .where(
@@ -146,9 +142,7 @@ class BlogRepository:
         )
         return list((await self.session.execute(stmt)).scalars())
 
-    async def recent_published_for_rss(
-        self, tenant_id: uuid.UUID, *, limit: int
-    ) -> list[BlogPost]:
+    async def recent_published_for_rss(self, tenant_id: uuid.UUID, *, limit: int) -> list[BlogPost]:
         stmt = (
             select(BlogPost)
             .where(
@@ -160,9 +154,7 @@ class BlogRepository:
         )
         return list((await self.session.execute(stmt)).scalars())
 
-    async def due_scheduled_posts(
-        self, tenant_id: uuid.UUID, *, now: datetime
-    ) -> list[BlogPost]:
+    async def due_scheduled_posts(self, tenant_id: uuid.UUID, *, now: datetime) -> list[BlogPost]:
         """SCHEDULED posts past their go-live — worker-only. The status filter
         is the sweep's idempotency guard (a re-run no longer matches published
         rows)."""

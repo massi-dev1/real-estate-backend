@@ -108,9 +108,7 @@ class PlatformAdminService:
         rows = (await self.repo.session.execute(select(TenantUsage))).scalars().all()
         return {row.tenant_id: row for row in rows}
 
-    async def impersonate(
-        self, tenant_id: uuid.UUID, *, actor: AuditActor
-    ) -> ImpersonationGrant:
+    async def impersonate(self, tenant_id: uuid.UUID, *, actor: AuditActor) -> ImpersonationGrant:
         """Mint a time-boxed impersonation token for the tenant's admin (§8.16).
 
         Audit-logged (§10.11). The token carries an ``imp`` claim (the platform

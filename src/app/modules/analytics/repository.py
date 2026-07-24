@@ -49,9 +49,7 @@ class AnalyticsRepository:
     def add_events(self, events: Iterable[AnalyticsEvent]) -> None:
         self.session.add_all(list(events))
 
-    async def listing_event_counts_for_day(
-        self, tenant_id: uuid.UUID, day: date
-    ) -> list[Row[Any]]:
+    async def listing_event_counts_for_day(self, tenant_id: uuid.UUID, day: date) -> list[Row[Any]]:
         """Per-listing counts of the listing-relevant event types on ``day``,
         for the listing-stats rollup. Groups on ``(listing_id, event_type)`` so
         one scan covers views/saves/inquiries."""

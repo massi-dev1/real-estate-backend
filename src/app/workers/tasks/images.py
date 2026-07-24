@@ -49,10 +49,7 @@ def blurhash_of(image: pyvips.Image) -> str:
     mem = bytes(small.write_to_memory())
     width, height, bands = small.width, small.height, small.bands
     pixels = [
-        [
-            [mem[(row * width + col) * bands + band] for band in range(3)]
-            for col in range(width)
-        ]
+        [[mem[(row * width + col) * bands + band] for band in range(3)] for col in range(width)]
         for row in range(height)
     ]
     return str(blurhash.encode(pixels, components_x=4, components_y=3, linear=False))

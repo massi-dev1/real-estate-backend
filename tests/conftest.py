@@ -126,9 +126,7 @@ def create_tenant_user(
 
     async def _create(tenant_id: str | uuid.UUID, email: str, role: Role) -> uuid.UUID:
         tid = uuid.UUID(str(tenant_id))
-        user = User(
-            tenant_id=tid, email=email, password_hash=_FIXTURE_PASSWORD_HASH, role=role
-        )
+        user = User(tenant_id=tid, email=email, password_hash=_FIXTURE_PASSWORD_HASH, role=role)
         async with app.state.session_factory() as session, session.begin():
             await set_tenant_guc(session, tid)
             session.add(user)

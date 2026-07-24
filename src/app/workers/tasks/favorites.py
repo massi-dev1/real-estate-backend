@@ -38,7 +38,10 @@ logger = structlog.get_logger(__name__)
 
 def _to_context(tenant: Tenant) -> TenantContext:
     return TenantContext(
-        id=tenant.id, slug=tenant.slug, name=tenant.name, status=tenant.status.value,
+        id=tenant.id,
+        slug=tenant.slug,
+        name=tenant.name,
+        status=tenant.status.value,
         settings=tenant.settings,
     )
 
@@ -53,9 +56,7 @@ def _build_service(session: AsyncSession) -> FavoritesService:
         build_agents_boundary(session),
         build_usage_boundary(session),
     )
-    return FavoritesService(
-        FavoritesRepository(session), listings, users, settings=get_settings()
-    )
+    return FavoritesService(FavoritesRepository(session), listings, users, settings=get_settings())
 
 
 @shared_task(name="app.workers.tasks.favorites.match_published_listing")
@@ -66,9 +67,7 @@ def match_published_listing(tenant_id: str, listing_id: str) -> int:
     tid = uuid.UUID(tenant_id)
 
     async def _load_tenant(session: AsyncSession) -> Tenant | None:
-        return (
-            await session.execute(select(Tenant).where(Tenant.id == tid))
-        ).scalar_one_or_none()
+        return (await session.execute(select(Tenant).where(Tenant.id == tid))).scalar_one_or_none()
 
     tenant = run_scoped(None, _load_tenant)
     if tenant is None or tenant.status == TenantStatus.SUSPENDED:
@@ -81,9 +80,7 @@ def match_published_listing(tenant_id: str, listing_id: str) -> int:
 
     sent = run_scoped(tid, _match)
     if sent:
-        logger.info(
-            "instant_alerts_sent", tenant_id=tenant_id, listing_id=listing_id, count=sent
-        )
+        logger.info("instant_alerts_sent", tenant_id=tenant_id, listing_id=listing_id, count=sent)
     return sent
 
 

@@ -49,9 +49,7 @@ async def test_new_tenant_starts_on_trial_with_end_date(
     assert body["domains"][0]["verificationToken"]
 
 
-async def test_unknown_plan_rejected(
-    client: AsyncClient, platform_headers: dict[str, str]
-) -> None:
+async def test_unknown_plan_rejected(client: AsyncClient, platform_headers: dict[str, str]) -> None:
     body = await create_tenant(client, platform_headers)
     resp = await client.put(
         f"/api/v1/platform/tenants/{body['id']}/plan",
@@ -66,9 +64,7 @@ async def test_listing_quota_enforced_and_released(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    _, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     # Shrink the plan to a 2-listing ceiling via a bespoke plan monkeypatch is
     # awkward; instead use the real trial plan (25) but drive to the edge by
     # patching the trial limit down for this test.
@@ -84,27 +80,19 @@ async def test_listing_quota_enforced_and_released(
     try:
         created_ids = []
         for _ in range(2):
-            resp = await client.post(
-                "/api/v1/portal/listings", json=LISTING_BODY, headers=admin
-            )
+            resp = await client.post("/api/v1/portal/listings", json=LISTING_BODY, headers=admin)
             assert resp.status_code == 201, resp.text
             created_ids.append(resp.json()["id"])
         # Third exceeds the quota → 403 quota-exceeded problem+json.
-        resp = await client.post(
-            "/api/v1/portal/listings", json=LISTING_BODY, headers=admin
-        )
+        resp = await client.post("/api/v1/portal/listings", json=LISTING_BODY, headers=admin)
         assert resp.status_code == 403
         assert resp.json()["type"].endswith("quota-exceeded")
 
         # Deleting one frees a slot (archive first — published-workflow states
         # are undeletable, but a fresh draft deletes straight away).
-        resp = await client.delete(
-            f"/api/v1/portal/listings/{created_ids[0]}", headers=admin
-        )
+        resp = await client.delete(f"/api/v1/portal/listings/{created_ids[0]}", headers=admin)
         assert resp.status_code in (200, 204), resp.text
-        resp = await client.post(
-            "/api/v1/portal/listings", json=LISTING_BODY, headers=admin
-        )
+        resp = await client.post("/api/v1/portal/listings", json=LISTING_BODY, headers=admin)
         assert resp.status_code == 201, resp.text
     finally:
         PLANS["trial"] = original
@@ -115,9 +103,7 @@ async def test_site_config_surfaces_usage_and_limits(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    _, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     resp = await client.post("/api/v1/portal/listings", json=LISTING_BODY, headers=admin)
     assert resp.status_code == 201
 
@@ -177,9 +163,7 @@ async def test_offboard_suspends_exports_and_schedules_deletion(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     tenant_id = tenant["id"]
     # Give the tenant a listing so the export has content.
     await client.post("/api/v1/portal/listings", json=LISTING_BODY, headers=admin)
@@ -225,18 +209,14 @@ async def test_purge_scheduled_tenant_deletes_it(
     # Move the deletion instant into the past so the purge sweep picks it up.
     async with app.state.engine.begin() as conn:
         await conn.execute(
-            text(
-                "UPDATE tenants SET deletion_scheduled_at = :past WHERE id = :id"
-            ),
+            text("UPDATE tenants SET deletion_scheduled_at = :past WHERE id = :id"),
             {"past": datetime.now(UTC) - timedelta(days=1), "id": tenant_id},
         )
     from app.workers.tasks.tenants import purge_scheduled_tenants
 
     purged = purge_scheduled_tenants()
     assert purged >= 1
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     assert resp.status_code == 404
 
 
@@ -275,9 +255,7 @@ async def test_webhook_verification_and_lifecycle(
     assert resp.status_code == 200, resp.text
     assert resp.json() == {"received": True, "processed": True}
 
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     assert resp.json()["status"] == "active"
     assert resp.json()["plan"] == "growth"
 
@@ -356,9 +334,7 @@ async def test_payment_failed_then_dunning_suspends(
     )
     assert resp.json()["status"] == "past_due"
     # Tenant still reachable during grace.
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     assert resp.json()["status"] == "active"
 
     # Move the grace deadline into the past and run the dunning sweep.
@@ -371,9 +347,7 @@ async def test_payment_failed_then_dunning_suspends(
 
     suspended = run_dunning_sweep()
     assert suspended >= 1
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     assert resp.json()["status"] == "suspended"
 
 
@@ -399,9 +373,7 @@ async def test_webhook_unknown_plan_still_activates(
     assert resp.json() == {"received": True, "processed": True}
 
     # Tenant activated; plan stays the trial default (unknown plan ignored).
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     assert resp.json()["status"] == "active"
     assert resp.json()["plan"] == "trial"
     resp = await client.get(
@@ -436,9 +408,7 @@ async def test_renewal_clears_pending_offboard(
     )
     assert resp.status_code == 200, resp.text
 
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     reactivated = resp.json()
     assert reactivated["status"] == "active"
     assert reactivated["offboardingAt"] is None
@@ -448,9 +418,7 @@ async def test_renewal_clears_pending_offboard(
     from app.workers.tasks.tenants import purge_scheduled_tenants
 
     purge_scheduled_tenants()
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     assert resp.status_code == 200
 
 
@@ -468,9 +436,7 @@ async def test_trial_expiry_sweep_suspends(
 
     suspended = expire_trials()
     assert suspended >= 1
-    resp = await client.get(
-        f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers
-    )
+    resp = await client.get(f"/api/v1/platform/tenants/{tenant_id}", headers=platform_headers)
     assert resp.json()["status"] == "suspended"
 
 
@@ -482,9 +448,7 @@ async def test_platform_metrics(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     await client.post("/api/v1/portal/listings", json=LISTING_BODY, headers=admin)
 
     resp = await client.get("/api/v1/platform/metrics", headers=platform_headers)
@@ -501,9 +465,7 @@ async def test_impersonation_mints_token_and_audits(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, _ = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, _ = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     tenant_id = tenant["id"]
 
     resp = await client.post(
@@ -537,12 +499,8 @@ async def test_impersonation_suspended_tenant_conflict(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, _ = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
-    await client.post(
-        f"/api/v1/platform/tenants/{tenant['id']}/suspend", headers=platform_headers
-    )
+    tenant, _ = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    await client.post(f"/api/v1/platform/tenants/{tenant['id']}/suspend", headers=platform_headers)
     resp = await client.post(
         f"/api/v1/platform/tenants/{tenant['id']}/impersonate", headers=platform_headers
     )
@@ -554,11 +512,7 @@ async def test_impersonation_requires_platform_admin(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     # A tenant admin cannot reach the platform impersonation endpoint.
-    resp = await client.post(
-        f"/api/v1/platform/tenants/{tenant['id']}/impersonate", headers=admin
-    )
+    resp = await client.post(f"/api/v1/platform/tenants/{tenant['id']}/impersonate", headers=admin)
     assert resp.status_code in (401, 403)

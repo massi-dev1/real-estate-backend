@@ -48,14 +48,10 @@ class AnalyticsEvent(Base):
     # Composite PK to satisfy partitioning (created_at is the partition key).
     # Declared to mirror the migration's raw DDL exactly; kept out of the mixins
     # since UUIDPrimaryKeyMixin assumes a single-column id PK.
-    created_at: Mapped[datetime] = mapped_column(
-        server_default=text("now()"), primary_key=True
-    )
+    created_at: Mapped[datetime] = mapped_column(server_default=text("now()"), primary_key=True)
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
 
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE")
-    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"))
     event_type: Mapped[str] = mapped_column(String(40))
     # Anonymous session correlation (a client-generated opaque id) — never PII.
     session_id: Mapped[str | None] = mapped_column(String(64))

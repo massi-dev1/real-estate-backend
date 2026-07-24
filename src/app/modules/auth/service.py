@@ -121,8 +121,7 @@ class AuthService:
                 family_id=family_id or uuid.uuid4(),
                 user_agent=client.user_agent,
                 ip=client.ip,
-                expires_at=datetime.now(UTC)
-                + timedelta(days=self.settings.refresh_token_ttl_days),
+                expires_at=datetime.now(UTC) + timedelta(days=self.settings.refresh_token_ttl_days),
             )
         )
         await self.sessions.flush()
@@ -224,9 +223,7 @@ class AuthService:
             pipe = self.redis.pipeline()
             for jti in jtis:
                 jti_str = jti if isinstance(jti, str) else jti.decode()
-                pipe.set(
-                    jti_denylist_key(jti_str), "1", ex=self.settings.access_token_ttl_seconds
-                )
+                pipe.set(jti_denylist_key(jti_str), "1", ex=self.settings.access_token_ttl_seconds)
             pipe.delete(key)
             await pipe.execute()
         except Exception:

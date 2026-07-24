@@ -121,9 +121,7 @@ class FavoritesService:
         when it's relisted), so a page can run short — by design."""
         page_size = clamp_limit(limit)
         after = _decode_keyset(cursor) if cursor else None
-        rows = await self.repo.list_favorites(
-            tenant.id, actor.id, after=after, limit=page_size
-        )
+        rows = await self.repo.list_favorites(tenant.id, actor.id, after=after, limit=page_size)
         items = rows[:page_size]
         next_cursor = None
         if len(rows) > page_size:
@@ -131,9 +129,7 @@ class FavoritesService:
             next_cursor = encode_cursor(
                 {"created_at": last.created_at.isoformat(), "id": str(last.id)}
             )
-        listings = await self.listings.published_by_ids(
-            tenant.id, [f.listing_id for f in items]
-        )
+        listings = await self.listings.published_by_ids(tenant.id, [f.listing_id for f in items])
         pairs = [(f, listings[f.listing_id]) for f in items if f.listing_id in listings]
         return pairs, next_cursor
 
@@ -147,10 +143,7 @@ class FavoritesService:
         *,
         fallback_locale: str,
     ) -> SavedSearch:
-        if (
-            await self.repo.count_saved_searches(tenant.id, actor.id)
-            >= MAX_SAVED_SEARCHES_PER_USER
-        ):
+        if await self.repo.count_saved_searches(tenant.id, actor.id) >= MAX_SAVED_SEARCHES_PER_USER:
             raise ConflictError(
                 f"You can keep at most {MAX_SAVED_SEARCHES_PER_USER} saved searches."
             )
@@ -247,8 +240,7 @@ class FavoritesService:
                 to=email_to,
                 subject="Confirm your search alert",
                 text=(
-                    "Use this code to confirm your listing alert "
-                    f"subscription:\n\ncode: {token}\n"
+                    f"Use this code to confirm your listing alert subscription:\n\ncode: {token}\n"
                 ),
             )
 
@@ -309,9 +301,7 @@ class FavoritesService:
 
     # ---- compliance boundary (§8.17): DSR export + erasure ----
 
-    async def export_for_user(
-        self, tenant: TenantContext, user_id: uuid.UUID
-    ) -> dict[str, object]:
+    async def export_for_user(self, tenant: TenantContext, user_id: uuid.UUID) -> dict[str, object]:
         """Read-only dump of a user's favorites + saved searches (§10.12). The
         DSR export fans out to this instead of reading favorites' tables."""
         favorites = await self.repo.all_favorites_for_user(tenant.id, user_id)
@@ -359,9 +349,7 @@ class FavoritesService:
             await self.repo.flush()
             return None
 
-    async def match_published_listing(
-        self, tenant: TenantContext, listing_id: uuid.UUID
-    ) -> int:
+    async def match_published_listing(self, tenant: TenantContext, listing_id: uuid.UUID) -> int:
         """Instant alerts: run every active ``instant`` search against one
         just-published listing; one email per match. Returns emails sent."""
         listing = await self.listings.published_by_ids(tenant.id, [listing_id])

@@ -148,9 +148,7 @@ async def test_capture_dedupes_by_email_and_merge_fills(
     assert len(items) == 2
     assert items[0]["contactId"] == items[1]["contactId"]  # one contact, two leads
 
-    contact = await client.get(
-        f"/api/v1/portal/contacts/{items[0]['contactId']}", headers=admin
-    )
+    contact = await client.get(f"/api/v1/portal/contacts/{items[0]['contactId']}", headers=admin)
     assert contact.status_code == 200
     # Merge-fill: previously-NULL fields got the new values...
     assert contact.json()["phone"] == "+213555000111"
@@ -230,9 +228,7 @@ async def test_listing_agent_strategy_assigns_from_listing(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="agent1@a.example.com"
     )
@@ -273,9 +269,7 @@ async def test_round_robin_distributes_and_respects_caps(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent_ids: list[str] = []
     for i in range(3):
         headers = await add_user(
@@ -392,9 +386,7 @@ async def test_stage_advance_stops_drip(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     resp = await capture(client, capture_body(email="dripstop@example.com"))
     lead_id = resp.json()["id"]
 
@@ -421,9 +413,7 @@ async def test_activity_sets_first_response_and_stops_drip(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     resp = await capture(client, capture_body(email="responder@example.com"))
     lead_id = resp.json()["id"]
     before = await client.get(f"{PORTAL_LEADS}/{lead_id}", headers=admin)
@@ -561,9 +551,7 @@ async def test_agents_see_only_their_assigned_leads(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent_a = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="scope-a@a.example.com"
     )
@@ -596,9 +584,7 @@ async def test_agent_cannot_reassign_or_edit_contacts(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     agent = await add_user(
         client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="reassign@a.example.com"
     )
@@ -709,7 +695,10 @@ async def test_buyer_renter_cannot_access_leads(
 ) -> None:
     tenant, _ = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     buyer = await add_user(
-        client, create_tenant_user, str(tenant["id"]), Role.BUYER_RENTER,
+        client,
+        create_tenant_user,
+        str(tenant["id"]),
+        Role.BUYER_RENTER,
         email="buyer@a.example.com",
     )
     assert (await client.get(PORTAL_LEADS, headers=buyer)).status_code == 403
@@ -723,9 +712,7 @@ async def test_contact_timeline_merges_leads_and_activities(
     platform_headers: dict[str, str],
     create_tenant_user: CreateTenantUser,
 ) -> None:
-    tenant, admin = await tenant_and_login(
-        client, platform_headers, create_tenant_user, Role.ADMIN
-    )
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
     first = await capture(client, capture_body(email="timeline@example.com"))
     second = await capture(client, capture_body(email="timeline@example.com", source="chat"))
     lead_id = second.json()["id"]

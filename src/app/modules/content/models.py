@@ -148,18 +148,14 @@ class NeighborhoodGuide(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     # Computed by the nightly Beat job — never client-writable.
     # {"listing_count": int, "median_price": "..." | null}.
-    stats: Mapped[dict[str, Any]] = mapped_column(
-        default=dict, server_default=text("'{}'::jsonb")
-    )
+    stats: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default=text("'{}'::jsonb"))
     stats_computed_at: Mapped[datetime | None]
     published_at: Mapped[datetime | None]
 
 
 class MarketReport(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "market_reports"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "slug", name="uq_market_reports_tenant_slug"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_id", "slug", name="uq_market_reports_tenant_slug"),)
 
     tenant_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tenants.id", ondelete="CASCADE"), index=True
@@ -168,9 +164,7 @@ class MarketReport(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # i18n title: {"ar": ..., "fr": ..., "en": ...}.
     title: Mapped[dict[str, Any]] = mapped_column()
     # Author-supplied charts/numbers the agency compiled — not auto-computed.
-    stats: Mapped[dict[str, Any]] = mapped_column(
-        default=dict, server_default=text("'{}'::jsonb")
-    )
+    stats: Mapped[dict[str, Any]] = mapped_column(default=dict, server_default=text("'{}'::jsonb"))
     # Private-bucket key of the rendered PDF (like media documents); NULL until
     # the worker finishes rendering it.
     pdf_object_key: Mapped[str | None] = mapped_column(String(300))

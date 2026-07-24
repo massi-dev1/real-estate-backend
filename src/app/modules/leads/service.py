@@ -199,9 +199,7 @@ class LeadsService:
 
     # ---- contact dedupe ----
 
-    async def find_or_create_contact(
-        self, tenant_id: uuid.UUID, data: ContactCaptureIn
-    ) -> Contact:
+    async def find_or_create_contact(self, tenant_id: uuid.UUID, data: ContactCaptureIn) -> Contact:
         """Match priority: email first (stronger identity signal than a
         possibly-shared phone/landline), then phone. On a match, merge-fill
         only — never overwrite a non-NULL field with a fresher-but-not-
@@ -652,9 +650,7 @@ class LeadsService:
         activities = await self.repo.list_activities_for_lead(tenant_id, lead.id)
         # NO_SHOW is a *negative* signal — it must not also count as engagement.
         engagement = sum(
-            1
-            for a in activities
-            if a.type not in (ActivityType.SYSTEM, ActivityType.NO_SHOW)
+            1 for a in activities if a.type not in (ActivityType.SYSTEM, ActivityType.NO_SHOW)
         )
         no_shows = sum(1 for a in activities if a.type is ActivityType.NO_SHOW)
         last_at = max((a.created_at for a in activities), default=lead.created_at)
@@ -962,9 +958,7 @@ class LeadsService:
 
     # ---- compliance boundary (§8.17): DSR export, erasure, retention ----
 
-    async def export_for_subject(
-        self, tenant_id: uuid.UUID, email: str
-    ) -> dict[str, Any]:
+    async def export_for_subject(self, tenant_id: uuid.UUID, email: str) -> dict[str, Any]:
         """Read-only dump of a subject's CRM footprint (§10.12): their contacts,
         the leads on those contacts, and the leads' activity timeline. Keyed on
         email — the buyer/seller identity that ties a portal account to its CRM
@@ -1090,9 +1084,7 @@ class LeadsService:
             drip.stopped_reason = DripStopReason.SEQUENCE_COMPLETE
         else:
             next_step = sequence[drip.step_index]
-            drip.next_send_at = datetime.now(UTC) + timedelta(
-                days=next_step["day"] - step["day"]
-            )
+            drip.next_send_at = datetime.now(UTC) + timedelta(days=next_step["day"] - step["day"])
         await self.repo.flush()
 
 

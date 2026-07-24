@@ -184,9 +184,7 @@ async def portal_audit_log(
     next_cursor = None
     if len(rows) > page_size:
         last = items[-1]
-        next_cursor = encode_cursor(
-            {"created_at": last.created_at.isoformat(), "id": str(last.id)}
-        )
+        next_cursor = encode_cursor({"created_at": last.created_at.isoformat(), "id": str(last.id)})
     total = await repo.count(tenant_id=tenant.id, action=action)
     return Page(
         items=[AuditLogOut.model_validate(r) for r in items],

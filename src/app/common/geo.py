@@ -96,7 +96,5 @@ def _rings_from_ewkb(raw: bytes) -> list[list[LonLat]]:
             points = struct.unpack_from(f"{p_order}{num_points * 2}d", raw, offset)
             offset += num_points * 16
             if ring_index == 0:  # outer ring only; holes are never written by us
-                rings.append(
-                    [(points[i], points[i + 1]) for i in range(0, len(points), 2)]
-                )
+                rings.append([(points[i], points[i + 1]) for i in range(0, len(points), 2)])
     return rings
