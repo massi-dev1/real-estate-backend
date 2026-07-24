@@ -1136,12 +1136,14 @@ async def _handle_lead_created(
     """Outbox handler for ``lead.created`` (§12): the durable speed-to-lead
     notification (§8.4). Runs inside the relay's tenant-scoped transaction; it
     re-resolves the assigned agent (the account may have been disabled since
-    capture) and, if still active, notifies them. Idempotent by construction —
-    ``notify()`` writes one in-app row and, at-least-once, a duplicate relay run
-    would send a second speed-to-lead email, an acceptable over-delivery for a
-    "call this lead now" nudge (the same at-least-once contract every outbox
-    handler lives under). No agent → nothing to do (an unassigned lead's
-    escalation sweep covers it)."""
+    capture) and, if still active, notifies them. The in-app ``LEAD_ASSIGNED``
+    row is written *inside* that atomic transaction alongside the outbox row's
+    ``delivered`` status, so a relay re-drain never duplicates it (a delivered
+    row is skipped). Only the deferred external send could repeat on a
+    post-commit-replay crash — an acceptable duplicate "call this lead now"
+    email, the same at-least-once trade every post-commit send lives under (see
+    ``core.events``). No agent → nothing to do (an unassigned lead's escalation
+    sweep covers it)."""
     agent_raw = payload.get("agentId")
     if not agent_raw:
         return

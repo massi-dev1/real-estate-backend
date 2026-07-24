@@ -21,10 +21,21 @@ pending rows and dispatches each to its handler with **at-least-once** delivery:
   exponentially-backed-off ``next_attempt_at``; past ``OUTBOX_MAX_ATTEMPTS`` it
   moves to ``failed`` (a poison message never blocks the queue).
 
-At-least-once means a handler **must be idempotent** — the same event may be
-dispatched twice (relay claimed a row, delivered, then crashed before the commit
-marking it delivered). Every registered handler here already is (``notify()``
-writes one in-app row keyed by content; webhook delivery is keyed by delivery id).
+**Delivery is atomic per event.** ``drain_outbox`` runs a handler's DB work and
+the ``status = delivered`` write in the *same* transaction (the relay's scoped
+session), so there is no window where a handler's side effect commits but the
+row is left pending — either both land or neither does. Duplicates are therefore
+only possible from a **post-commit replay**: a handler's *external* side effect
+enqueued via ``on_commit`` (e.g. ``notify()``'s email send / WS push) fires after
+that commit, and if the relay task then dies before Celery acks it, a task retry
+re-runs the whole tick. The already-``delivered`` row is skipped, so the DB stays
+consistent — but an ``on_commit`` external send from the crashed run may repeat.
+Handlers must therefore tolerate a repeated *external* effect (an occasional
+duplicate speed-to-lead email / webhook POST, the accepted at-least-once trade
+every post-commit send in the codebase already lives under — the webhook
+receiver dedupes on the signed event; a duplicate email is low harm). The in-app
+notification *row* is written inside the atomic transaction, so a post-commit
+replay never duplicates it — only the deferred external send can repeat.
 
 Handlers are registered in code (``register_handler``), not the DB — the set of
 domain events is auditable in git like the RBAC matrix, and a payload is a plain
@@ -184,7 +195,17 @@ async def drain_outbox(session: AsyncSession, tenant: TenantContext) -> tuple[in
     failure rolls back only that event's side effects (so a half-applied event is
     never committed), while the outer transaction stays usable to record the
     retry/fail bookkeeping and to process the *rest* of the batch — one poison
-    event must not abort the whole tick."""
+    event must not abort the whole tick.
+
+    All handlers for one event share that single savepoint, so a transient
+    failure in a *later* handler rolls back an *earlier* one that had succeeded
+    and the whole event is retried (re-running every handler). This couples the
+    event's handlers deliberately: the alternative — a savepoint per handler with
+    per-handler retry state — trades a large complexity increase for eliminating
+    an already-tolerated duplicate. Because every handler's DB work is
+    idempotent-by-atomicity (a re-drain re-derives the same rows) and only the
+    deferred *external* sends can repeat (the accepted at-least-once trade, see
+    the module docstring), the shared savepoint is the right call for v1."""
     now = datetime.now(UTC)
     stmt = (
         select(OutboxEvent)

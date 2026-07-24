@@ -183,10 +183,24 @@ class WebhookService:
         """Fan a domain event out to every subscribed endpoint: one ``pending``
         delivery row per endpoint, each enqueued post-commit. Returns the number
         of deliveries created. This is the outbox handler — it runs inside the
-        relay's transaction, so the delivery rows commit with the outbox row
-        being marked delivered (at-least-once: a relay crash re-runs this, which
-        would create duplicate delivery rows, but the *receiver* dedupes on the
-        signed event — acceptable and documented)."""
+        relay's transaction, so the delivery rows commit atomically with the
+        outbox row being marked ``delivered``. A re-drain is therefore impossible
+        while those rows exist (the outbox row is ``delivered``); duplicate
+        delivery rows only arise on a post-commit-replay (the relay committed,
+        then died before Celery acked, and a task retry re-ran the whole tick) —
+        the *receiver* dedupes on the signed event, the accepted at-least-once
+        trade.
+
+        Two recovery notes (both accepted for v1, matching syndication's manual-
+        recovery stance): the post-commit ``_enqueue_delivery`` fires *after*
+        commit, so (a) if this handler's savepoint rolled back, the delivery row
+        never committed and the enqueue dispatches a task that finds no row (the
+        harmless ``delivery gone`` no-op), and (b) if the relay crashes between
+        commit and the post-commit drain, a committed PENDING delivery is never
+        enqueued and — since ``deliver`` is one-shot, not a sweep — stays PENDING.
+        A "re-enqueue stale PENDING deliveries" sweep is the documented deferral;
+        the outbox relay itself guarantees the *event* is durable, which is the
+        reliability property this part exists to provide."""
         endpoints = await self.repo.endpoints_for_event(tenant.id, event_type)
         for endpoint in endpoints:
             delivery = WebhookDelivery(

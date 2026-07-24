@@ -120,10 +120,19 @@ def _literal_ip(host: str) -> str | None:
 
 
 class SsrfProtectedTransport(httpx.AsyncBaseTransport):
-    """An httpx transport that re-validates the target host on every request —
-    including each hop of a redirect chain — so a name cannot be rebound to an
-    internal address between validation and connection, and a public endpoint
-    cannot 302 the delivery into a private one.
+    """An httpx transport that resolves the target host **once**, validates that
+    exact address, and then **pins the connection to it** — on every request,
+    including each hop of a redirect chain.
+
+    Pinning closes the TOCTOU/DNS-rebinding window a validate-then-let-httpx-
+    re-resolve design leaves open: if the guard resolves a name to a public IP
+    but httpx performs its *own* second lookup to open the socket, a short-TTL /
+    round-robin attacker DNS can return an internal address for that second
+    lookup — so httpx would connect to exactly the host the guard just approved a
+    *different* answer for. Here the request URL's host is rewritten to the
+    validated IP literal, the original hostname is preserved in the ``Host``
+    header (and as the TLS SNI / cert-check name), so the socket connects to the
+    one address that was checked — no second resolution happens.
 
     Wraps a real transport; the guard runs first and raises :class:`SsrfError`
     before any socket is opened."""
@@ -133,8 +142,35 @@ class SsrfProtectedTransport(httpx.AsyncBaseTransport):
         self._allow = allow_private_hosts
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        validate_public_url(str(request.url), allow_private_hosts=self._allow)
-        return await self._inner.handle_async_request(request)
+        host = request.url.host
+        if self._allow:
+            # Escape hatch (dev/test to a local mock): scheme/host structure is
+            # still enforced, but no address check or pinning.
+            validate_public_url(str(request.url), allow_private_hosts=True)
+            return await self._inner.handle_async_request(request)
+
+        # Resolve once, validate that single address, connect to *it*.
+        literal = _literal_ip(host)
+        addresses = [literal] if literal is not None else _resolve_addresses(host)
+        if not addresses:
+            raise SsrfError(f"Host {host!r} does not resolve.")
+        pinned = addresses[0]
+        if _addr_is_blocked(pinned):
+            raise SsrfError(f"Host {host!r} resolves to a non-public address ({pinned}).")
+        if request.url.scheme not in _ALLOWED_SCHEMES:
+            raise SsrfError(f"URL scheme must be http or https, got {request.url.scheme!r}.")
+
+        # Pin: connect to the validated IP, keep the original hostname for the
+        # Host header + TLS SNI so cert validation and vhost routing still work.
+        pinned_url = request.url.copy_with(host=pinned)
+        pinned_request = httpx.Request(
+            method=request.method,
+            url=pinned_url,
+            headers=request.headers,  # carries the original Host header
+            stream=request.stream,
+            extensions={**request.extensions, "sni_hostname": host},
+        )
+        return await self._inner.handle_async_request(pinned_request)
 
     async def aclose(self) -> None:
         await self._inner.aclose()

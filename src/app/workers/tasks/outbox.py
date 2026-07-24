@@ -50,6 +50,12 @@ def relay_outbox() -> dict[str, int]:
     run (delivered/failed across all tenants) — handy in logs, idempotent."""
 
     async def _tenants(session: AsyncSession) -> list[Tenant]:
+        # A suspended (e.g. non-paying) tenant's events are deliberately *not*
+        # drained — their notifications/webhooks pause with the account. The rows
+        # stay PENDING (not failed): ``attempts`` only advances on an actual
+        # drain, so nothing exhausts while suspended, and reactivation resumes
+        # delivery from where it paused. Same "skip suspended" stance as every
+        # other Beat sweep (leads/appointments/blog).
         stmt = select(Tenant).where(Tenant.status != TenantStatus.SUSPENDED)
         return list((await session.execute(stmt)).scalars())
 

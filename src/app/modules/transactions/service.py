@@ -274,9 +274,14 @@ class TransactionsService:
             deal.lost_reason = data.lost_reason if target is DealStatus.CLOSED_LOST else None
             # Durable ``deal.closed`` domain event (§12) for outbound-webhook
             # fan-out — a tenant can drive downstream automation off a closed
-            # deal. Written in this transaction so it can never be lost. Commission
-            # figures are deliberately omitted from the payload (they are admin-
-            # gated on the API; a webhook must not become a side channel for them).
+            # deal. Fires for **both** outcomes (won and lost): "closed" means a
+            # deal reached a terminal state, and a subscriber that only wants
+            # won-deal automation must key on the ``outcome`` field (a distinct
+            # event name would drop the lost-deal signal a receiver may
+            # legitimately want, e.g. CRM cleanup). Written in this transaction so
+            # it can never be lost. Commission figures are deliberately omitted
+            # (they are admin-gated on the API; a webhook must not become a side
+            # channel for them).
             emit_event(
                 self.repo.session,
                 tenant,

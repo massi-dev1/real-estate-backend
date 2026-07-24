@@ -17,6 +17,7 @@ import json
 import uuid
 from typing import Any
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
@@ -85,6 +86,53 @@ def test_ssrf_guard_escape_hatch_allows_private() -> None:
     validate_public_url("http://127.0.0.1:9999/hook", allow_private_hosts=True)
     with pytest.raises(SsrfError):
         validate_public_url("nonsense", allow_private_hosts=True)
+
+
+async def test_ssrf_transport_pins_resolved_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The transport resolves once and connects to *that* IP (closing the
+    validate-then-re-resolve TOCTOU): the outbound request's URL host is the
+    pinned public IP, while the Host header + SNI keep the original name."""
+    import app.core.net as net
+
+    monkeypatch.setattr(net, "_resolve_addresses", lambda host: ["93.184.216.34"])
+
+    seen: dict[str, Any] = {}
+
+    class _Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            seen["url_host"] = request.url.host
+            seen["host_header"] = request.headers.get("host")
+            seen["sni"] = request.extensions.get("sni_hostname")
+            return httpx.Response(200)
+
+        async def aclose(self) -> None: ...
+
+    transport = net.SsrfProtectedTransport(_Inner(), allow_private_hosts=False)
+    async with httpx.AsyncClient(transport=transport) as client:
+        resp = await client.post("https://hooks.example.com/inbound", content=b"{}")
+    assert resp.status_code == 200
+    assert seen["url_host"] == "93.184.216.34"  # connected to the validated IP
+    assert seen["host_header"] == "hooks.example.com"  # original name preserved
+    assert seen["sni"] == "hooks.example.com"  # TLS cert-check name preserved
+
+
+async def test_ssrf_transport_blocks_rebind_to_private(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A name that resolves to a private address at connect time is refused by
+    the transport before any socket opens — the DNS-rebinding defense."""
+    import app.core.net as net
+
+    monkeypatch.setattr(net, "_resolve_addresses", lambda host: ["169.254.169.254"])
+
+    class _Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+            raise AssertionError("should never connect")
+
+        async def aclose(self) -> None: ...
+
+    transport = net.SsrfProtectedTransport(_Inner(), allow_private_hosts=False)
+    async with httpx.AsyncClient(transport=transport) as client:
+        with pytest.raises(SsrfError):
+            await client.post("https://evil.example.com/hook", content=b"{}")
 
 
 # ---- outbox durability ----
