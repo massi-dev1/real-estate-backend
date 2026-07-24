@@ -56,15 +56,28 @@ jobs:
           --health-retries 20
 
       # Mailpit stands in for SMTP: the suite asserts on delivered mail via its
-      # API, and config.py defaults smtp_host/port to localhost:1025.
+      # API, and config.py defaults smtp_host/port to localhost:1025. Pinned
+      # like every other service — a floating tag turns an upstream release
+      # into a red build on an unrelated commit. The image ships wget, not
+      # curl, so the health probe uses wget.
       mailpit:
-        image: axllent/mailpit:latest
+        image: axllent/mailpit:v1.30.5
         ports:
           - 1025:1025
           - 8025:8025
+        options: >-
+          --health-cmd "wget -q --spider http://localhost:8025/livez"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
 
+      # The `edge-cicd` tag runs `minio server /data` as its default command —
+      # required here, since a GitHub service container cannot supply a
+      # `command:` override. That tag floats, so it is pinned by digest for
+      # reproducibility (re-resolve with:
+      #   docker image inspect minio/minio:edge-cicd --format '{{index .RepoDigests 0}}')
       minio:
-        image: minio/minio:edge-cicd
+        image: minio/minio@sha256:29e8e51691d11e779468f275002779b221fd3902518d103e35c8a8bb2ef0f3ea
         env:
           MINIO_ROOT_USER: minio
           MINIO_ROOT_PASSWORD: minio12345
@@ -134,6 +147,11 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      # KEEP IN SYNC with the `quality` job's db service above — both must run
+      # migrations against the same Postgres, which is the divergence this
+      # workflow exists to catch. (Not factored into a YAML anchor: an unknown
+      # top-level key to hang the anchor off is not a documented GitHub
+      # Actions feature, and an invalid workflow fails every job at once.)
       db:
         image: postgis/postgis:16-3.4
         env:
@@ -147,14 +165,6 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 20
-
-    env:
-      APP_ENV: local
-      APP_SECRET_KEY: ci-secret-key-0123456789abcdef0123456789abcdef
-      DATABASE_URL: postgresql+asyncpg://app_user:app_password@localhost:5432/realestate_test
-      DATABASE_DDL_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_test
-      STORAGE_ACCESS_KEY: minio
-      STORAGE_SECRET_KEY: minio12345
 
     steps:
       - uses: actions/checkout@v4
@@ -170,6 +180,32 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen
+
+      # Alembic resolves DATABASE_DDL_URL through app.core.config, and
+      # tests/conftest.py already pins every value the Settings model requires
+      # before importing it. Importing conftest here (rather than restating the
+      # connection strings in YAML) keeps one source of truth: when the test DB
+      # name, the app role password, or a newly-required setting changes, the
+      # suite fails loudly and this job follows automatically.
+      - name: Export the same env tests/conftest.py pins
+        run: |
+          uv run python - <<'PY' >> "$GITHUB_ENV"
+          import tests.conftest  # noqa: F401  — import applies the os.environ pins
+          import os
+
+          for key in (
+              "APP_ENV",
+              "APP_SECRET_KEY",
+              "DATABASE_URL",
+              "DATABASE_DDL_URL",
+              "REDIS_URL",
+              "STORAGE_ACCESS_KEY",
+              "STORAGE_SECRET_KEY",
+              "STORAGE_MEDIA_BUCKET",
+              "STORAGE_DOCS_BUCKET",
+          ):
+              print(f"{key}={os.environ[key]}")
+          PY
 
       # §15/§13: the conftest already exercises downgrade→upgrade before the
       # suite; this makes the round trip explicit on a *clean* database, so a
@@ -208,9 +244,31 @@ jobs:
           load: true
           tags: real-estate-backend:ci
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # mode=min: only the final stage's layers are exported. mode=max
+          # would push every intermediate layer (the whole uv dependency stage
+          # and the libvips apt layer) on each branch push, and GitHub's 10 GB
+          # per-repo cache evicts LRU — it would starve the uv caches the
+          # quality and migrations jobs depend on.
+          cache-to: type=gha,mode=min
 
+      # Two checks: the binaries resolve on PATH and the image is non-root...
       - name: Smoke-check the image
         run: |
           docker run --rm --entrypoint sh real-estate-backend:ci -c \
             'uvicorn --version && celery --version && alembic --version && id -un'
+
+      # ...and the real entrypoint runs. The check above overrides ENTRYPOINT,
+      # so on its own it would never execute entrypoint.sh — a dropped bash or
+      # a CRLF-mangled checkout (see .gitattributes) would surface only when a
+      # container starts in production. Running without --entrypoint exercises
+      # the script's `*)` raw-exec branch (its own log line proves it ran), and
+      # `bash -n` parses the whole file including the api/worker/beat branches.
+      #
+      # The role branches themselves are deliberately not started here: they
+      # exec long-running processes that need a live database and broker, and
+      # `--help` does not short-circuit them (celery imports the app first, and
+      # the §10.6 fail-fast config check fires before any arg parsing).
+      - name: Smoke-check the entrypoint
+        run: |
+          docker run --rm real-estate-backend:ci echo "entrypoint dispatched"
+          docker run --rm real-estate-backend:ci bash -n /app/entrypoint.sh

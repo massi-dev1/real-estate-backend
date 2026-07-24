@@ -17,6 +17,11 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
         args: ["--maxkb=1024"]
+        # uv.lock is generated, must be committed in lockstep with
+        # pyproject.toml for `uv sync --frozen`, and grows monotonically with
+        # every dependency — it would eventually trip this hook on the one
+        # commit that cannot be split.
+        exclude: ^uv\.lock$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.7
@@ -30,15 +35,24 @@ repos:
     hooks:
       - id: mypy
         # mypy needs the project's own dependencies to type-check imports;
-        # pre-commit builds an isolated env, so the runtime deps that ship
-        # type information have to be declared here.
+        # pre-commit builds an isolated env, so every runtime dep that ships
+        # type information (py.typed or stubs) has to be declared here. Deps
+        # without type info are covered by the ignore_missing_imports override
+        # in pyproject.toml instead (geoalchemy2, asyncpg, celery, pyvips,
+        # blurhash, reportlab) and are deliberately absent.
         additional_dependencies:
           - "fastapi>=0.115"
           - "pydantic[email]>=2.10"
           - "pydantic-settings>=2.7"
           - "sqlalchemy[asyncio]>=2.0.36"
           - "alembic>=1.14"
-          - "redis>=5.2"
+          # Upper bound matches what the project actually resolves to: kombu
+          # (via celery[redis], §12) pins redis<6.5, and auth/service.py has a
+          # `type: ignore[misc]` for that version's smembers overload. Without
+          # the bound this env installs redis 7+, where the ignore is unused
+          # and mypy --strict fails on a warn_unused_ignores error the real
+          # gate never sees.
+          - "redis>=5.2,<6.5"
           - "pyjwt>=2.10"
           - "httpx>=0.28"
           - "structlog>=24.4"
@@ -46,5 +60,8 @@ repos:
           - "icalendar>=7.2.0"
           - "nh3>=0.2"
           - "dnspython>=2.7"
+          - "pwdlib[argon2]>=0.2"
+          - "uuid-utils>=0.10"
+          - "aiosmtplib>=5.1.2"
         args: ["--config-file=pyproject.toml"]
         pass_filenames: false
