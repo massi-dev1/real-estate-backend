@@ -1,0 +1,216 @@
+name: CI
+
+# §15 — the same gate CLAUDE.md documents locally, run on every push and PR:
+#   uv sync → ruff check → ruff format --check → mypy → pytest → pip-audit + bandit
+# plus an explicit migration upgrade/downgrade job and a Docker image build.
+#
+# The suite is a real-services suite by design (§13 — never SQLite), so the
+# `quality` job spins up service containers matching docker/docker-compose.yml:
+# postgis/postgis:16, redis:7, minio (+ bucket bootstrap), and mailpit for SMTP.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.5.29"
+  # Mirrors tests/conftest.py, which pins the app at localhost:5432 /
+  # localhost:6379 db 1 / localhost:9000. Service containers publish their
+  # ports on the runner host, so those literals resolve unchanged.
+  PGPASSWORD: postgres
+
+jobs:
+  # ── Lint, types, tests, security scans ────────────────────────────────────
+  quality:
+    name: Lint, types, tests & security
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: realestate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d realestate"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+      # Mailpit stands in for SMTP: the suite asserts on delivered mail via its
+      # API, and config.py defaults smtp_host/port to localhost:1025.
+      mailpit:
+        image: axllent/mailpit:latest
+        ports:
+          - 1025:1025
+          - 8025:8025
+
+      minio:
+        image: minio/minio:edge-cicd
+        env:
+          MINIO_ROOT_USER: minio
+          MINIO_ROOT_PASSWORD: minio12345
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -fsS http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GitHub service containers cannot mount volumes, so the compose
+      # `initdb` bind-mount has no equivalent here — run the exact same script
+      # through psql instead of duplicating the role/DB DDL in this workflow.
+      - name: Create app_user role and realestate_test DB
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f docker/initdb/01-app-role.sql
+
+      # Mirrors the compose `minio-init` one-shot: dev + test buckets, with the
+      # public variants buckets set to anonymous download (local CDN stand-in).
+      - name: Bootstrap MinIO buckets
+        run: |
+          curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc
+          chmod +x /usr/local/bin/mc
+          mc alias set local http://localhost:9000 minio minio12345
+          mc mb -p local/media local/media-private local/media-test local/media-private-test
+          mc anonymous set download local/media
+          mc anonymous set download local/media-test
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check
+
+      - name: Ruff format check
+        run: uv run ruff format --check
+
+      - name: Mypy (strict)
+        run: uv run mypy
+
+      # The coverage gate (--cov + fail_under) lands in Part 33, which adds
+      # pytest-cov; until then CI runs the suite without it.
+      - name: Pytest
+        run: uv run pytest -q
+
+      - name: pip-audit (dependency CVEs)
+        # The local project itself is not on PyPI and cannot be audited.
+        run: uv run pip-audit --skip-editable
+
+      - name: Bandit (static security scan)
+        # Waivers for this tree are scoped in [tool.bandit] in pyproject.toml,
+        # each with a written rationale — never a blanket severity filter.
+        run: uv run bandit -c pyproject.toml -r src/app -q
+
+  # ── Migrations apply and roll back cleanly on an empty database ───────────
+  migrations:
+    name: Migration upgrade/downgrade
+    runs-on: ubuntu-latest
+
+    services:
+      db:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: realestate
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d realestate"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      APP_ENV: local
+      APP_SECRET_KEY: ci-secret-key-0123456789abcdef0123456789abcdef
+      DATABASE_URL: postgresql+asyncpg://app_user:app_password@localhost:5432/realestate_test
+      DATABASE_DDL_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_test
+      STORAGE_ACCESS_KEY: minio
+      STORAGE_SECRET_KEY: minio12345
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create app_user role and realestate_test DB
+        run: psql -h localhost -U postgres -d postgres -v ON_ERROR_STOP=1 -f docker/initdb/01-app-role.sql
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # §15/§13: the conftest already exercises downgrade→upgrade before the
+      # suite; this makes the round trip explicit on a *clean* database, so a
+      # migration that only works against an already-populated schema fails
+      # here rather than on a production rollback.
+      - name: alembic upgrade head
+        run: uv run alembic upgrade head
+
+      - name: alembic downgrade base
+        run: uv run alembic downgrade base
+
+      - name: alembic upgrade head (re-apply)
+        run: uv run alembic upgrade head
+
+  # ── The production image builds ───────────────────────────────────────────
+  docker:
+    name: Build production image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build-only: no registry credentials exist yet, so nothing is pushed.
+      # The promote-later seam: add a registry login step + `push: true` with
+      # `tags: <registry>/real-estate-backend:${{ github.sha }}` once creds
+      # land, and deploy by digest (§16 — one image, three roles).
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: false
+          load: true
+          tags: real-estate-backend:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-check the image
+        run: |
+          docker run --rm --entrypoint sh real-estate-backend:ci -c \
+            'uvicorn --version && celery --version && alembic --version && id -un'

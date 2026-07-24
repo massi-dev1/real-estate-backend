@@ -1,0 +1,50 @@
+# Local dev hooks (§15). Install once with:
+#   uv run pre-commit install
+#
+# These mirror the fast half of the CI gate (.github/workflows/ci.yml) so a
+# lint/type failure surfaces before the push, not after. Tests and the security
+# scans deliberately stay CI-only — they need the docker stack and are too slow
+# for a commit hook.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.7
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        # mypy needs the project's own dependencies to type-check imports;
+        # pre-commit builds an isolated env, so the runtime deps that ship
+        # type information have to be declared here.
+        additional_dependencies:
+          - "fastapi>=0.115"
+          - "pydantic[email]>=2.10"
+          - "pydantic-settings>=2.7"
+          - "sqlalchemy[asyncio]>=2.0.36"
+          - "alembic>=1.14"
+          - "redis>=5.2"
+          - "pyjwt>=2.10"
+          - "httpx>=0.28"
+          - "structlog>=24.4"
+          - "boto3-stubs[s3]>=1.43.49"
+          - "icalendar>=7.2.0"
+          - "nh3>=0.2"
+          - "dnspython>=2.7"
+        args: ["--config-file=pyproject.toml"]
+        pass_filenames: false

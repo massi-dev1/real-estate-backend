@@ -37,6 +37,9 @@ dev = [
     "mypy>=1.14",
     "asgi-lifespan>=2.1",
     "boto3-stubs[s3]>=1.43.49",
+    "pip-audit>=2.10.1",
+    "bandit>=1.9.4",
+    "pre-commit>=4.6.1",
 ]
 
 [build-system]
@@ -84,6 +87,26 @@ ignore_missing_imports = true
 # strict mode would otherwise erase every task function's signature.
 module = ["app.workers.tasks.*"]
 disallow_untyped_decorators = false
+
+[tool.bandit]
+# Scanned tree only; tests exercise deliberately-weak fixtures and are not
+# shipped, so they stay out of the security gate.
+exclude_dirs = ["tests"]
+# Scoped waivers — each of these fires on an idiom this codebase uses
+# deliberately, and rewriting the code to silence the checker would make it
+# worse, not safer:
+#   B101 assert_used — asserts are invariant guards after schema/DB validation
+#       (`assert x is not None  # schema-validated`) that narrow types for
+#       mypy strict. The runtime image never runs python -O, so they are live.
+#   B105 hardcoded_password_string — fires on HMAC purpose-domain constants
+#       (e.g. `_TOKEN_PURPOSE = "valuation-request"`), which are separation
+#       labels, not secrets. Real secrets are config-only (§10.6).
+#   B110 try_except_pass — the WebSocket relay's send-failure fall-through
+#       (client gone → break to cleanup) is the intended control flow.
+#   B406 import_xml_sax — flags `xml.sax.saxutils.escape`, which is the XML
+#       *output escaping* used to build the sitemap/RSS/feed documents. It is
+#       the defense, not a parser; no untrusted XML is ever parsed.
+skips = ["B101", "B105", "B110", "B406"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
