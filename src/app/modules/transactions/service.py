@@ -20,13 +20,13 @@ before the insert, so a bogus id is a 404, never an FK ``IntegrityError`` → 50
 import hashlib
 import uuid
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated
 
 import structlog
 from fastapi import Depends, Request
 from uuid_utils.compat import uuid7
 
+from app.common.money import commission_amount
 from app.core.config import Settings
 from app.core.database import SessionDep, on_commit
 from app.core.events import EVENT_DEAL_CLOSED, emit_event
@@ -60,8 +60,6 @@ from app.modules.transactions.schemas import (
 from app.modules.users.service import UserService, get_user_service
 
 logger = structlog.get_logger(__name__)
-
-_CENT = Decimal("0.01")
 
 # The valid deal workflow moves (§8.13). A closed deal is terminal.
 _CLOSED = frozenset({DealStatus.CLOSED_WON, DealStatus.CLOSED_LOST})
@@ -340,9 +338,7 @@ class TransactionsService:
             # Derive the amount from the deal price when both are known; the
             # figure is informational until a price exists.
             if deal.price is not None and data.rate is not None:
-                deal.commission_amount = (deal.price * data.rate / 100).quantize(
-                    _CENT, rounding=ROUND_HALF_UP
-                )
+                deal.commission_amount = commission_amount(deal.price, data.rate)
             else:
                 deal.commission_amount = None
         else:  # FLAT

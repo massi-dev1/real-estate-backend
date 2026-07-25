@@ -127,10 +127,19 @@ jobs:
       - name: Mypy (strict)
         run: uv run mypy
 
-      # The coverage gate (--cov + fail_under) lands in Part 33, which adds
-      # pytest-cov; until then CI runs the suite without it.
-      - name: Pytest
-        run: uv run pytest -q
+      # The gate itself (fail_under, the greenlet concurrency setting that
+      # makes async service code measurable at all, and the exclusions) lives
+      # in [tool.coverage.*] in pyproject.toml, so a local `--cov` run and CI
+      # enforce exactly the same thing.
+      - name: Pytest (with coverage gate)
+        run: uv run pytest -q --cov --cov-report=term
+
+      # The gate above scores the whole tree; §13 names modules/ + core/
+      # specifically, so report that slice too. Same collected data, narrower
+      # include — a drop concentrated in business code cannot hide behind
+      # well-covered infrastructure.
+      - name: Coverage — modules/ + core/ (§13)
+        run: uv run coverage report --include="src/app/modules/*,src/app/core/*"
 
       - name: pip-audit (dependency CVEs)
         # The local project itself is not on PyPI and cannot be audited.

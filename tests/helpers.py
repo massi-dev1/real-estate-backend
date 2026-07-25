@@ -1,13 +1,17 @@
 """Shared helpers for auth-flow tests: tenant-scoped requests, refresh-cookie
 plumbing, and reading one-time codes back out of Mailpit."""
 
+import os
 import re
 from typing import Any
 
 import httpx
 from httpx import AsyncClient, Response
 
-MAILPIT_URL = "http://localhost:8025"
+# Read from the environment so the testcontainers path (tests/containers.py)
+# can point the suite at a random-port Mailpit; falls back to the fixed
+# compose/CI port when reusing a running stack.
+MAILPIT_URL = os.environ.get("MAILPIT_URL", "http://localhost:8025")
 HOST_A = "agency-a.test"
 HOST_B = "agency-b.test"
 

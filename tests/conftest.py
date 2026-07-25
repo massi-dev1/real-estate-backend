@@ -1,22 +1,41 @@
-"""Shared fixtures. Tests run against the real docker-compose services
-(Postgres+PostGIS on realestate_test, Redis db 1, Mailpit SMTP) — never
-SQLite (§13)."""
+"""Shared fixtures. Tests run against real backing services (Postgres+PostGIS,
+Redis, MinIO, Mailpit) — never SQLite (§13).
+
+By default those are the hand-started docker-compose stack on its fixed ports
+(also what CI's service containers provide). Set ``TESTCONTAINERS=1`` to have
+the suite provision its own throwaway containers instead — see
+``tests/containers.py`` for why reuse stays the default.
+"""
 
 import os
+from contextlib import ExitStack
+
+from tests import containers
+
+# Provisioning must happen before the pins below and before anything imports
+# app.core.config, since it *is* what those pins point at.
+_container_stack: ExitStack | None = None
+if containers.enabled():
+    _container_stack = ExitStack()
+    containers.provision(_container_stack)
 
 # Must be set before anything imports app.core.config.
 os.environ["APP_ENV"] = "local"
 os.environ["APP_SECRET_KEY"] = "test-secret-key-0123456789abcdef0123456789abcdef"
 os.environ["FIELD_ENCRYPTION_KEY"] = "test-field-key-fedcba9876543210fedcba9876543210"
-os.environ["DATABASE_URL"] = (
-    "postgresql+asyncpg://app_user:app_password@localhost:5432/realestate_test"
+# Where the backing services live. `setdefault`, not assignment: when
+# TESTCONTAINERS=1 provisioned them above they are already pinned to random
+# ports, and re-asserting localhost here would point the suite at the wrong
+# (or a missing) instance. Unset = the compose/CI stack's fixed ports.
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+asyncpg://app_user:app_password@localhost:5432/realestate_test"
 )
-os.environ["DATABASE_DDL_URL"] = (
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_test"
+os.environ.setdefault(
+    "DATABASE_DDL_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/realestate_test"
 )
-os.environ["REDIS_URL"] = "redis://localhost:6379/1"
-os.environ["CELERY_BROKER_URL"] = "redis://localhost:6379/1"
-os.environ["CELERY_RESULT_BACKEND"] = "redis://localhost:6379/1"
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
+os.environ.setdefault("CELERY_BROKER_URL", "redis://localhost:6379/1")
+os.environ.setdefault("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 # Dedicated MinIO buckets (created by the compose minio-init one-shot), so
 # test objects never mix with dev data.
 os.environ["STORAGE_ACCESS_KEY"] = "minio"
@@ -67,6 +86,18 @@ PLATFORM_ADMIN_EMAIL = "root@platform.example.com"
 # accounts — hashing per test would add ~50ms each.
 FIXTURE_PASSWORD = "Fixture-Pass-123456"
 _FIXTURE_PASSWORD_HASH = hash_password(FIXTURE_PASSWORD)
+
+
+def pytest_sessionfinish() -> None:
+    """Tear provisioned containers down while pytest's streams are still open.
+
+    An ``atexit`` hook runs *after* pytest closes its capture streams, so
+    docker-py's teardown logging lands on a closed file and floods the exit
+    with `I/O operation on closed file`. The session hook is late enough that
+    every test is done and early enough that logging still works.
+    """
+    if _container_stack is not None:
+        _container_stack.close()
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -1,22 +1,32 @@
 ﻿# Remaining Build Parts — Prompts
 
-Read this file before starting the next part. Do **only the next undone part** —
-check the **Build progress log** in `CLAUDE.md` to see which was last completed,
-then paste that part's prompt below to Claude as-is (or lightly adapt).
+## ✅ The build plan is complete (Part 33, 2026-07-25).
 
-**Where we are:** Parts 1–24 shipped every §8 feature module (§8.1–§8.18).
-Parts 25–33 are the **production-hardening phases** that close the cross-cutting
-blueprint concerns deferred out of the module parts: §10 security, §11 caching,
-§13 test infra, §14 observability, §15 CI/CD, §16 deployment, §18 checklist.
-**Parts 25 (deployment), 26 (CI/CD), 27 (observability), 28 (edge security),
-30 (data-protection primitives), 29 (auth hardening) and 31 (outbox + outbound
-webhooks) are done.**
+Parts 1–24 shipped every §8 feature module (§8.1–§8.18). Parts 25–33 closed the
+cross-cutting blueprint concerns: §16 deployment (25), §15 CI/CD (26), §14
+observability (27), §10.1–§10.2 edge security (28), §10.7/§9 data-protection
+primitives (30), §7.1/§10.3 auth hardening (29), §12/§8.14/§10.9 outbox +
+outbound webhooks (31), §11 caching (32), and §13 test infra + the §18
+production gate (33).
+
+**Nothing below is an undone build part.** What remains is the standing
+credential-gated list at the bottom of this file, plus the **operational** gaps
+recorded as written waivers in [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md)
+— three of which are named there as blocking a first production tenant:
+
+1. Nightly backups + a **verified** restore (the only unrecoverable one).
+2. The incident runbook (deploy, rollback, restore, tenant offboard).
+3. Alerting — uptime, dead-letter, and the queue-depth/error-rate rules the
+   Part 27 metrics already export.
+
+None of those three can be closed by writing more application code; they are
+deployment-time and monitoring-stack work.
+
 The full plan lives at
 `~/.claude/plans/okay-build-a-workflow-lucky-crayon.md`.
 
-**Sequence (dependency-ordered):** 25 → 26 → 27 → 28 → 30 → 29 → 31 → **32** → 33.
-(Part 30's crypto helper `core/crypto.py`'s `EncryptedString` field-encrypts the
-Part 29 MFA secret. Next undone: **Part 32 — caching & performance (§11)**.)
+The per-part prompts below are kept as a record of what each part was asked to
+do — useful when reading the Build progress log in `CLAUDE.md` alongside them.
 
 General rules that apply to every part (already in `CLAUDE.md`, repeated here so
 they're not missed): one part at a time; query `graphify-out/` before searching

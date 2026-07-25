@@ -12,13 +12,14 @@ lands in the CRM.
 
 import uuid
 from datetime import UTC, datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from typing import Annotated, Any
 
 import structlog
 from fastapi import Depends, Request
 
 from app.common.geo import point_lonlat, to_point
+from app.common.money import monthly_payment, percentage_of, to_money
 from app.core.config import Settings
 from app.core.database import SessionDep, on_commit
 from app.core.exceptions import ConflictError, NotFoundError
@@ -59,8 +60,6 @@ DEFAULT_ANNUAL_RATE_PERCENT = Decimal("6.5")
 DEFAULT_TERM_YEARS = 25
 DEFAULT_DOWN_PAYMENT_PERCENT = Decimal("20")
 
-_CENT = Decimal("0.01")
-
 
 def _tenant_mortgage_settings(tenant: TenantContext) -> tuple[Decimal, int, Decimal]:
     """(annual_rate_percent, term_years, down_payment_percent) — free-form
@@ -91,8 +90,8 @@ def _band(ppsm: list[float], area: float) -> tuple[Decimal, Decimal]:
         upper = min(lower + 1, len(values) - 1)
         return values[lower] + (values[upper] - values[lower]) * (pos - lower)
 
-    low = Decimal(str(percentile(0.25) * area)).quantize(_CENT, rounding=ROUND_HALF_UP)
-    high = Decimal(str(percentile(0.75) * area)).quantize(_CENT, rounding=ROUND_HALF_UP)
+    low = to_money(Decimal(str(percentile(0.25) * area)))
+    high = to_money(Decimal(str(percentile(0.75) * area)))
     return low, high
 
 
@@ -257,18 +256,12 @@ class ValuationsService:
         down = (
             data.down_payment
             if data.down_payment is not None
-            else (data.price * down_percent / 100).quantize(_CENT, rounding=ROUND_HALF_UP)
+            else percentage_of(data.price, down_percent)
         )
         principal = data.price - down
         months = years * 12
-        if annual_rate == 0:
-            monthly = principal / months
-        else:
-            monthly_rate = annual_rate / Decimal(100) / Decimal(12)
-            factor = (1 + monthly_rate) ** months
-            monthly = principal * monthly_rate * factor / (factor - 1)
-        monthly = monthly.quantize(_CENT, rounding=ROUND_HALF_UP)
-        total_paid = (monthly * months).quantize(_CENT, rounding=ROUND_HALF_UP)
+        monthly = monthly_payment(principal, annual_rate, months)
+        total_paid = to_money(monthly * months)
         return MortgageEstimateOut(
             price=data.price,
             down_payment=down,

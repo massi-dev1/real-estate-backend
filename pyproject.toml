@@ -50,6 +50,13 @@ dev = [
     "pip-audit>=2.10.1",
     "bandit>=1.9.4",
     "pre-commit>=4.6.1",
+    "pytest-cov>=7.1.0",
+    "hypothesis>=6.161.2",
+    "factory-boy>=3.3.3",
+    "testcontainers[minio,postgres,redis]>=4.13.3",
+    "types-factory-boy>=0.4.1",
+    "coverage[toml]>=7.15.2",
+    "greenlet>=3.5.3",
 ]
 
 [build-system]
@@ -80,6 +87,16 @@ select = [
     "ASYNC",
 ]
 ignore = ["B008"]  # FastAPI Depends() in defaults is idiomatic
+
+[tool.ruff.lint.per-file-ignores]
+# The env pins and the optional testcontainers bootstrap must run *before*
+# anything imports app.core.config, so the imports genuinely cannot come
+# first — that ordering is the file's whole job.
+"tests/conftest.py" = ["E402"]
+# factory_boy declares fields as class attributes; a list/dict default is the
+# library's own idiom, and `ClassVar` would take them out of the declaration
+# set factory_boy builds from.
+"tests/factories.py" = ["RUF012"]
 
 [tool.mypy]
 python_version = "3.13"
@@ -137,3 +154,31 @@ asyncio_default_test_loop_scope = "session"
 
 [tool.coverage.run]
 source = ["src/app"]
+# SQLAlchemy's async layer runs service/repository code inside a greenlet
+# (that is how `await` reaches a sync DBAPI driver). Without this, coverage's
+# tracer never sees those frames and reports code the suite demonstrably
+# exercises as unhit — `set_commission` measured 0% while its own test
+# asserted on the derived amount. This is a measurement fix, not a gate tweak.
+concurrency = ["greenlet", "thread"]
+
+[tool.coverage.report]
+# §13's ~85% gate. The suite currently measures 92% on modules/ + core/, so
+# the threshold sits below where we are on purpose: it is a ratchet against
+# regression, not a target to chase. Raising it to the current number would
+# fail the build on any honest refactor that adds a defensive branch, which
+# is how coverage gates start rewarding tests written for the metric.
+fail_under = 85
+show_missing = true
+skip_covered = true
+exclude_also = [
+    # Type-checking-only imports never execute at runtime.
+    "if TYPE_CHECKING:",
+    # Protocol/ABC bodies declare a contract; there is nothing to run.
+    "^\\s*\\.\\.\\.$",
+    "raise NotImplementedError",
+]
+
+[tool.coverage.paths]
+# CI checks out to a different absolute path than a dev machine; without this
+# the two runs' data would not combine into one report.
+source = ["src/app", "*/src/app"]
