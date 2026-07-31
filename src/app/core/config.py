@@ -5,10 +5,16 @@ purpose: the app must fail fast at startup when configuration is missing.
 """
 
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The stub billing provider performs *real* HMAC verification, so this value is
+# the only thing standing between the public, auth-free webhook endpoint and an
+# attacker who can forge subscription events. It ships as a default so local dev
+# works out of the box; ``_reject_dev_secrets`` refuses it outside local.
+DEV_BILLING_WEBHOOK_SECRET = "dev-billing-webhook-secret"
 
 
 class Settings(BaseSettings):
@@ -73,7 +79,7 @@ class Settings(BaseSettings):
     # defer the live integration). ``billing_webhook_secret`` signs/verifies
     # webhooks (§10.9); it has a dev default since the stub is self-contained.
     billing_provider: str = "stub"
-    billing_webhook_secret: str = "dev-billing-webhook-secret"
+    billing_webhook_secret: str = DEV_BILLING_WEBHOOK_SECRET
     trial_length_days: int = 14
     # Dunning (§8.16): a past_due subscription stays reachable this long before
     # the dunning sweep auto-suspends the tenant.
@@ -225,6 +231,26 @@ class Settings(BaseSettings):
     @property
     def is_local(self) -> bool:
         return self.app_env == "local"
+
+    @model_validator(mode="after")
+    def _reject_dev_secrets(self) -> Self:
+        """Fail fast when a shipped dev credential survives into a deployed
+        environment (§10.6).
+
+        ``billing_webhook_secret`` is the one secret with a working default, and
+        the webhook endpoint it protects is deliberately unauthenticated — the
+        signature *is* the authentication. A deployment that leaves the default
+        in place lets anyone who has read this repository forge a
+        ``subscription.activated`` event (free plan upgrade) or a
+        ``subscription.canceled`` one (suspend a competitor's tenant), so this
+        must be a startup failure rather than a runtime surprise.
+        """
+        if self.app_env != "local" and self.billing_webhook_secret == DEV_BILLING_WEBHOOK_SECRET:
+            raise ValueError(
+                "BILLING_WEBHOOK_SECRET is still the built-in development default. "
+                "Set a unique secret before running outside app_env=local."
+            )
+        return self
 
 
 @lru_cache

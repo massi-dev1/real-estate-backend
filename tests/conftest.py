@@ -23,6 +23,12 @@ if containers.enabled():
 os.environ["APP_ENV"] = "local"
 os.environ["APP_SECRET_KEY"] = "test-secret-key-0123456789abcdef0123456789abcdef"
 os.environ["FIELD_ENCRYPTION_KEY"] = "test-field-key-fedcba9876543210fedcba9876543210"
+# Pinned for the same reason as APP_SECRET_KEY: `_reject_dev_secrets` refuses
+# the shipped default outside app_env=local, and several tests build a
+# `Settings(**get_settings().model_dump(), app_env="production")` to exercise
+# deployment-only behaviour (HSTS). Without a non-default value here that
+# round-trip trips the guard rather than the behaviour under test.
+os.environ["BILLING_WEBHOOK_SECRET"] = "test-billing-webhook-secret-0123456789"
 # Where the backing services live. `setdefault`, not assignment: when
 # TESTCONTAINERS=1 provisioned them above they are already pinned to random
 # ports, and re-asserting localhost here would point the suite at the wrong
