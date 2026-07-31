@@ -12,6 +12,7 @@ from starlette.types import Receive, Scope, Send
 from app.core.config import Settings, get_settings
 from app.core.cors import TenantCORSMiddleware, origin_host, strip_port
 from app.core.middleware import API_CSP, DOCS_CSP, SecurityHeadersMiddleware
+from app.core.rate_limit import client_ip
 from app.main import create_app
 from tests.helpers import HOST_A, HOST_B
 from tests.test_tenants_platform_api import create_tenant
@@ -424,3 +425,115 @@ async def test_health_probes_are_never_globally_limited(
         await application.state.redis.flushdb()
     assert set(statuses) == {200}
     get_settings.cache_clear()
+
+
+# ------------------------------------------------- trusted proxy (SEC-01) ---
+
+
+def _scope(peer: str, forwarded: str | None = None) -> Scope:
+    headers: list[tuple[bytes, bytes]] = []
+    if forwarded is not None:
+        headers.append((b"x-forwarded-for", forwarded.encode()))
+    return {"type": "http", "client": (peer, 51234), "headers": headers}
+
+
+def _settings_with(**overrides: Any) -> Settings:
+    return Settings(**{**get_settings().model_dump(), **overrides})
+
+
+def test_forwarded_for_is_ignored_from_an_untrusted_peer() -> None:
+    """The default (trust nothing) must never honour a client-supplied header —
+    otherwise any caller mints a fresh identity per request and erases its own
+    budget."""
+    settings = _settings_with(trusted_proxy_cidrs="")
+    resolved = client_ip(_scope("203.0.113.9", "1.2.3.4"), settings)
+    assert resolved == "203.0.113.9"
+
+
+def test_forwarded_for_is_honoured_from_a_trusted_proxy() -> None:
+    settings = _settings_with(trusted_proxy_cidrs="172.16.0.0/12", trusted_proxy_hops=1)
+    resolved = client_ip(_scope("172.18.0.5", "198.51.100.7"), settings)
+    assert resolved == "198.51.100.7"
+
+
+def test_spoofed_entries_cannot_displace_the_real_client() -> None:
+    """The client is counted from the RIGHT: an attacker may prepend anything,
+    but cannot push its own value past what our trusted hop appended."""
+    settings = _settings_with(trusted_proxy_cidrs="172.16.0.0/12", trusted_proxy_hops=1)
+    forwarded = "1.1.1.1, 2.2.2.2, 198.51.100.7"
+    assert client_ip(_scope("172.18.0.5", forwarded), settings) == "198.51.100.7"
+
+
+def test_two_hops_counts_past_both_trusted_proxies() -> None:
+    settings = _settings_with(trusted_proxy_cidrs="172.16.0.0/12", trusted_proxy_hops=2)
+    forwarded = "198.51.100.7, 10.9.9.9"
+    assert client_ip(_scope("172.18.0.5", forwarded), settings) == "198.51.100.7"
+
+
+def test_a_peer_outside_the_trusted_range_is_still_untrusted() -> None:
+    """Configuring a boundary must not accidentally trust everyone."""
+    settings = _settings_with(trusted_proxy_cidrs="172.16.0.0/12", trusted_proxy_hops=1)
+    assert client_ip(_scope("203.0.113.9", "198.51.100.7"), settings) == "203.0.113.9"
+
+
+def test_ipv4_mapped_ipv6_peer_matches_a_v4_cidr() -> None:
+    settings = _settings_with(trusted_proxy_cidrs="172.16.0.0/12", trusted_proxy_hops=1)
+    assert client_ip(_scope("::ffff:172.18.0.5", "198.51.100.7"), settings) == "198.51.100.7"
+
+
+@pytest.mark.parametrize("forwarded", ["unknown", "_hidden", "not-an-ip", ""])
+def test_unusable_forwarded_values_fall_back_to_the_peer(forwarded: str) -> None:
+    """RFC 7239 permits obfuscated identifiers; they are useless as a budget key."""
+    settings = _settings_with(trusted_proxy_cidrs="172.16.0.0/12", trusted_proxy_hops=1)
+    assert client_ip(_scope("172.18.0.5", forwarded), settings) == "172.18.0.5"
+
+
+def test_a_malformed_cidr_narrows_trust_instead_of_crashing() -> None:
+    """A typo in config must fail closed (ignore the entry), not raise at boot."""
+    settings = _settings_with(trusted_proxy_cidrs="not-a-cidr", trusted_proxy_hops=1)
+    assert client_ip(_scope("172.18.0.5", "198.51.100.7"), settings) == "172.18.0.5"
+
+
+def test_bare_proxy_address_is_accepted_as_a_host_network() -> None:
+    settings = _settings_with(trusted_proxy_cidrs="172.18.0.5", trusted_proxy_hops=1)
+    assert client_ip(_scope("172.18.0.5", "198.51.100.7"), settings) == "198.51.100.7"
+    assert client_ip(_scope("172.18.0.6", "198.51.100.7"), settings) == "172.18.0.6"
+
+
+async def test_proxied_clients_get_separate_rate_limit_budgets(
+    platform_headers: dict[str, str],
+) -> None:
+    """The finding itself: behind a proxy every peer is the proxy, so without
+    trusted-proxy resolution one client exhausting the budget would 429 every
+    other client too."""
+    get_settings.cache_clear()
+    settings = _settings_with(
+        global_rate_limit_per_minute=3,
+        trusted_proxy_cidrs="172.16.0.0/12",
+        trusted_proxy_hops=1,
+    )
+    application = create_app(settings)
+    async with LifespanManager(application):
+        # Every request arrives from the "proxy" peer, distinguished only by XFF.
+        transport = ASGITransport(app=application, client=("172.18.0.5", 51234))
+        async with AsyncClient(transport=transport, base_url="http://testserver") as c:
+            noisy = [
+                (
+                    await c.get(
+                        "/api/v1/site/config",
+                        headers={"Host": HOST_A, "X-Forwarded-For": "198.51.100.7"},
+                    )
+                ).status_code
+                for _ in range(6)
+            ]
+            quiet = (
+                await c.get(
+                    "/api/v1/site/config",
+                    headers={"Host": HOST_A, "X-Forwarded-For": "203.0.113.99"},
+                )
+            ).status_code
+        await application.state.redis.flushdb()
+    get_settings.cache_clear()
+
+    assert 429 in noisy, f"the noisy client was never limited: {noisy}"
+    assert quiet != 429, "a second client behind the same proxy shared the budget"

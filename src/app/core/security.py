@@ -23,6 +23,28 @@ JWT_ALGORITHM = "HS256"
 
 _password_hasher = PasswordHash.recommended()
 
+# Argon2id cost parameters, as a *deployment* constraint rather than a tuning
+# knob (§16). ``PasswordHash.recommended()`` resolves to m=64MiB, t=3, p=4 —
+# the OWASP-recommended floor, and deliberately left there: lowering the memory
+# cost is exactly what makes an offline crack of a stolen hash cheaper, which is
+# the attack this parameter exists to price up.
+#
+# The consequence is that **every concurrent password hash holds 64 MiB**, so a
+# container's memory limit has to cover ``ARGON2_MEMORY_MIB * concurrent
+# hashes`` on top of the app's own footprint, or the kernel OOM-kills the
+# process under an authentication burst. Hashing is CPU-bound and runs inline in
+# the event loop, so concurrent hashes per container is bounded by the process
+# count (``WEB_CONCURRENCY``), not by request concurrency — one uvicorn worker
+# hashes one password at a time.
+#
+# Budget for a container: WEB_CONCURRENCY * 64 MiB + ~256 MiB baseline.
+# The §16 default (WEB_CONCURRENCY=2) needs ~384 MiB; the audit's 512 MiB pod
+# fits it, but raising WEB_CONCURRENCY without raising the memory limit is the
+# way to break it. ``scripts/check_argon2_budget.py`` checks a given limit.
+ARGON2_MEMORY_MIB = 64
+ARGON2_TIME_COST = 3
+ARGON2_PARALLELISM = 4
+
 # Verified against when a login hits an unknown email, so the response takes
 # as long as a real Argon2 check — no user enumeration via timing (§7.1).
 DUMMY_PASSWORD_HASH = _password_hasher.hash("dummy-password-for-timing")

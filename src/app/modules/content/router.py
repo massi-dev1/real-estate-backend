@@ -10,6 +10,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response, status
+from pydantic import TypeAdapter
 
 from app.core.cache import cache_aside
 from app.core.http_cache import cached_json_response
@@ -47,6 +48,10 @@ from app.modules.media.service import MediaServiceDep
 
 public_router = APIRouter(tags=["content:public"])
 
+# Built once at import: a TypeAdapter compiles its serializer on construction,
+# so building one per request would cost more than the encoding it saves.
+_LEGAL_INDEX_ADAPTER = TypeAdapter(list[LegalIndexEntry])
+
 
 class PublicGuideDetailOut(OutSchema):
     """The guide detail: the guide plus a page of listings inside its boundary
@@ -80,7 +85,8 @@ async def get_public_page(
         ident=f"{slug}:{resolved}",
         ttl_seconds=settings.cache_content_ttl_seconds,
         loader=_load,
-        serialize=lambda v: v.model_dump(mode="json"),
+        # One-pass encode (see cache_aside's `dumps`) — no intermediate dict.
+        dumps=lambda v: v.model_dump_json(),
         deserialize=PublicPageOut.model_validate,
         enabled=settings.cache_enabled,
     )
@@ -120,7 +126,9 @@ async def list_legal(
         ident="index",
         ttl_seconds=settings.cache_content_ttl_seconds,
         loader=_load,
-        serialize=lambda v: [e.model_dump(mode="json") for e in v],
+        # TypeAdapter encodes the whole list in one pass, rather than dumping
+        # each entry to a dict and re-walking them all in json.dumps.
+        dumps=_LEGAL_INDEX_ADAPTER.dump_json,
         deserialize=lambda raw: [LegalIndexEntry.model_validate(e) for e in raw],
         enabled=settings.cache_enabled,
     )
@@ -149,7 +157,7 @@ async def get_legal(
         ident=f"{kind.value}:{resolved}",
         ttl_seconds=settings.cache_content_ttl_seconds,
         loader=_load,
-        serialize=lambda v: v.model_dump(mode="json"),
+        dumps=lambda v: v.model_dump_json(),
         deserialize=PublicLegalPageOut.model_validate,
         enabled=settings.cache_enabled,
     )

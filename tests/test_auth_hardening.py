@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from httpx import AsyncClient
 from sqlalchemy import text
 
+from app.core import security
 from app.core.config import get_settings
 from app.core.lockout import LoginLockout, _backoff_seconds
 from app.integrations.breach import hibp
@@ -668,3 +669,51 @@ async def test_revoked_sessions_drop_out_of_the_list(
     )
     assert len(listed.json()) == 1
     assert listed.json()[0]["current"] is True
+
+
+# ------------------------------------------ Argon2 cost budget (PYT-01) ---
+
+
+def test_argon2_constants_match_the_hasher_actually_in_use() -> None:
+    """The documented cost parameters drive the deployment memory budget
+    (``scripts/check_argon2_budget.py``), so they must not drift from what
+    pwdlib resolves — a stale constant would under-state the real footprint and
+    the container would OOM under an authentication burst.
+    """
+    hasher = security._password_hasher.hashers[0]._hasher
+    assert hasher.memory_cost == security.ARGON2_MEMORY_MIB * 1024
+    assert hasher.time_cost == security.ARGON2_TIME_COST
+    assert hasher.parallelism == security.ARGON2_PARALLELISM
+
+
+def test_argon2_memory_cost_stays_at_the_owasp_floor() -> None:
+    """Lowering the memory cost is what makes cracking a stolen hash cheaper;
+    if it is ever reduced, that must be a deliberate, reviewed change."""
+    assert security.ARGON2_MEMORY_MIB >= 64
+
+
+@pytest.mark.parametrize(
+    ("limit_mib", "workers", "expected_exit"),
+    [
+        (512, 2, 0),  # the §16 default topology fits the audit's 512 MiB pod
+        (512, 4, 1),  # doubling workers without raising the limit does not
+        (1024, 4, 0),  # ...and raising the limit fixes it
+    ],
+)
+def test_argon2_budget_check_gates_on_the_memory_limit(
+    monkeypatch: pytest.MonkeyPatch, limit_mib: int, workers: int, expected_exit: int
+) -> None:
+    """The checker must actually fail a deploy that would OOM, not just print."""
+    from scripts import check_argon2_budget
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "check_argon2_budget.py",
+            "--limit-mib",
+            str(limit_mib),
+            "--web-concurrency",
+            str(workers),
+        ],
+    )
+    assert check_argon2_budget.main() == expected_exit

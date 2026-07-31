@@ -44,6 +44,12 @@ https:// {
 	@internal path /internal/*
 	respond @internal 404
 
+	# Caddy appends the real client to X-Forwarded-For here. The app only
+	# trusts that header when the socket peer is inside TRUSTED_PROXY_CIDRS
+	# (set to this compose network in docker-compose.prod.yml) — without that
+	# pairing every client would share one rate-limit budget and one login
+	# lockout counter. If you add a CDN in front of Caddy, raise
+	# TRUSTED_PROXY_HOPS to match; the app counts from the right of the header.
 	reverse_proxy app:8000 {
 		health_uri /readyz
 		health_interval 10s

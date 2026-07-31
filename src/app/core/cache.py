@@ -84,17 +84,31 @@ async def cache_aside[T](
     ident: str,
     ttl_seconds: int,
     loader: Callable[[], Awaitable[T]],
-    serialize: Callable[[T], Any] = lambda v: v,
+    serialize: Callable[[T], Any] | None = None,
     deserialize: Callable[[Any], T] = lambda v: v,
+    dumps: Callable[[T], str | bytes] | None = None,
     enabled: bool = True,
 ) -> T:
     """Return a cached value or compute it via ``loader`` and cache the result.
 
     ``entity`` groups keys for versioned invalidation (e.g. ``"site_config"``,
     ``"content_page"``); ``ident`` distinguishes entries within an entity (a
-    slug, a viewport hash, or ``"_"`` for a singleton). ``serialize`` /
-    ``deserialize`` bridge the value and its JSON storage form — the default
-    identity pair works for plain JSON-able values (dicts, lists, scalars).
+    slug, a viewport hash, or ``"_"`` for a singleton). ``deserialize`` rebuilds
+    the value from its parsed JSON form; omit it for plain JSON-able values.
+
+    Two ways to write the value, and for a Pydantic model the second is
+    materially cheaper:
+
+    * ``serialize`` returns a JSON-able intermediate that this function then
+      ``json.dumps``. For a model that means building a whole dict tree only to
+      immediately re-encode and discard it.
+    * ``dumps`` returns the encoded JSON **directly** — e.g.
+      ``model_dump_json``, which encodes in one pass in Rust and skips the
+      intermediate dict entirely. Prefer this for large payloads (map clusters,
+      page bodies).
+
+    Pass one or the other; ``dumps`` wins if both are given. Passing neither
+    stores the value as-is (correct for dicts/lists/scalars).
 
     On any Redis error, or when disabled, the loader is called and its value
     returned uncached.
@@ -124,7 +138,13 @@ async def cache_aside[T](
     record_cache_lookup(entity, hit=False)
     value = await loader()
     try:
-        await redis.set(key, json.dumps(serialize(value)), ex=ttl_seconds)
+        if dumps is not None:
+            encoded: str | bytes = dumps(value)
+        elif serialize is not None:
+            encoded = json.dumps(serialize(value))
+        else:
+            encoded = json.dumps(value)
+        await redis.set(key, encoded, ex=ttl_seconds)
     except Exception:
         # Storing failed (Redis down, value not JSON-able) — the value is
         # still correct, just uncached this time.

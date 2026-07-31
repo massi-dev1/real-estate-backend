@@ -140,6 +140,24 @@ class Settings(BaseSettings):
     global_rate_limit_per_minute: int = 300
     auth_rate_limit_per_minute: int = 10
 
+    # Trusted reverse proxies (§10.2). Behind Caddy every request's socket peer
+    # is the proxy itself, so keying rate limits and lockout on the raw peer
+    # would pool the whole internet into one budget. When the peer matches one
+    # of these CIDRs, ``X-Forwarded-For`` is trusted and the real client is
+    # taken from it; otherwise the header is ignored entirely, since a caller
+    # that can set it freely would forge a fresh identity per request and erase
+    # its own limit. Empty (the default) = trust nothing, use the raw peer —
+    # correct for a directly-exposed app, and the safe default for a
+    # misconfigured one. Docker's default bridge is 172.16.0.0/12; the compose
+    # topology in `docker/` puts Caddy there. Comma-separated CIDRs or bare IPs.
+    trusted_proxy_cidrs: str = ""
+    # How many hops the trusted edge adds. With one proxy (the §16 topology)
+    # the client is the last-but-zero entry counting from the right; adding a
+    # CDN in front makes it 2. Counting from the *right* is what makes this
+    # unforgeable: an attacker can prepend entries but never append past the
+    # ones our own trusted hops wrote.
+    trusted_proxy_hops: int = 1
+
     # Field-level encryption (§10.7): AES-GCM secrets-at-rest for reversible
     # values (MFA TOTP secrets, Part 29; future provider tokens). No default —
     # same fail-fast rule as APP_SECRET_KEY, and deliberately a *different*

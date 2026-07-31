@@ -13,10 +13,13 @@ import uuid
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 
+import structlog
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
 from app.core.database import create_engine, create_session_factory, set_tenant_guc
+
+logger = structlog.get_logger(__name__)
 
 
 def _run_with_current_app[T](coro: Awaitable[T]) -> T:
@@ -86,11 +89,17 @@ async def _scoped_transaction[T](
         # Drain post-commit callbacks after a successful commit — mirrors
         # ``core.database.get_session`` so a task body that calls a service
         # registering ``on_commit`` side effects (e.g. ``notify()``'s WS push
-        # and external-send enqueue) fires them exactly as a request would.
+        # and external-send enqueue) fires them exactly as a request would,
+        # including the per-callback isolation: one failure must not skip the
+        # rest. That matters more here than on a request, since a Beat sweep
+        # can register callbacks for many rows in a single drain.
         callbacks: list[Callable[[], Awaitable[None]]]
         callbacks = session.info.get("post_commit_callbacks", [])
         for callback in callbacks:
-            await callback()
+            try:
+                await callback()
+            except Exception:
+                logger.exception("post_commit_callback_failed")
         return result
 
 

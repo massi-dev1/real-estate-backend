@@ -21,7 +21,7 @@ from app.core.database import SessionDep
 from app.core.exceptions import NotFoundError
 from app.core.pagination import MAX_PAGE_SIZE, Page, clamp_limit, decode_cursor, encode_cursor
 from app.core.permissions import CurrentUserDep, Permission, require
-from app.core.rate_limit import rate_limit
+from app.core.rate_limit import client_ip, rate_limit
 from app.core.tenancy import TenantDep
 from app.modules.auth.service import AuthServiceDep
 from app.modules.compliance.schemas import (
@@ -45,7 +45,13 @@ _consent_limit = rate_limit(key_prefix="consent", limit=30, window_seconds=60)
 
 
 def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
+    """The consenting caller's address, recorded as consent evidence (§10.12).
+
+    Goes through the shared trusted-proxy resolution: behind the §16 edge the
+    raw peer is Caddy, and "the proxy consented" is worthless as proof of who
+    actually did.
+    """
+    return client_ip(request, request.app.state.settings)
 
 
 def _user_agent(request: Request) -> str | None:

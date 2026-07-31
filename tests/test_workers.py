@@ -5,14 +5,19 @@ against the real Postgres/Redis stack — no separate worker process needed.
 
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import cast
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from httpx import AsyncClient
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import set_tenant_guc
+from app.core.database import get_session, on_commit, set_tenant_guc
 from app.core.permissions import Role
+from app.workers.db import _run_scoped
 from app.workers.tasks.email import send_email
 from app.workers.tasks.listings import flag_stale_listings
 from tests.helpers import mailpit_code
@@ -157,3 +162,65 @@ async def test_flag_stale_listings_is_tenant_scoped(
     got_b = await client.get(f"/api/v1/portal/listings/{listing_b['id']}", headers=admin_b)
     assert got_a.json()["staleFlaggedAt"] is not None
     assert got_b.json()["staleFlaggedAt"] is not None
+
+
+# ----------------------------- post-commit callback isolation (COD-01) ---
+
+
+async def test_worker_drain_runs_every_callback_even_when_one_raises() -> None:
+    """A failing post-commit callback must not skip the ones queued after it.
+
+    These are independent side effects of an already-committed transaction, so
+    dropping the remainder would silently leave a partially-invalidated cache or
+    an unqueued job. Matters most here: a Beat sweep registers callbacks for
+    many rows in a single drain.
+    """
+    ran: list[str] = []
+
+    async def ok_first() -> None:
+        ran.append("first")
+
+    async def boom() -> None:
+        ran.append("boom")
+        raise ConnectionError("redis is down")
+
+    async def ok_last() -> None:
+        ran.append("last")
+
+    async def body(session: AsyncSession) -> None:
+        for cb in (ok_first, boom, ok_last):
+            on_commit(session, cb)
+
+    # Unscoped: the callbacks are the subject, no tenant rows are touched.
+    await _run_scoped(None, body)
+
+    assert ran == ["first", "boom", "last"], f"a raising callback stopped the drain: {ran}"
+
+
+async def test_request_drain_runs_every_callback_even_when_one_raises(app: FastAPI) -> None:
+    """Same isolation on the request path, driven through the real
+    ``get_session`` dependency rather than a reimplementation of its drain."""
+    ran: list[str] = []
+
+    async def ok_first() -> None:
+        ran.append("first")
+
+    async def boom() -> None:
+        raise ConnectionError("redis is down")
+
+    async def ok_last() -> None:
+        ran.append("last")
+
+    class _StubRequest:
+        def __init__(self, application: FastAPI) -> None:
+            self.app = application
+            self.state = SimpleNamespace()  # no tenant → unscoped session
+
+    agen = get_session(cast(Request, _StubRequest(app)))
+    session = await anext(agen)
+    for cb in (ok_first, boom, ok_last):
+        on_commit(session, cb)
+    with suppress(StopAsyncIteration):
+        await anext(agen)  # closes the session, commits, drains callbacks
+
+    assert ran == ["first", "last"], f"a raising callback stopped the drain: {ran}"

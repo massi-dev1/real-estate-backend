@@ -20,6 +20,7 @@ from app.core.pagination import MAX_PAGE_SIZE, Page
 from app.core.pagination import decode_cursor as _decode_cursor
 from app.core.pagination import encode_cursor as _encode_cursor
 from app.core.permissions import CurrentUserDep, Permission, require
+from app.core.rate_limit import client_ip
 from app.core.tenancy import TenantDep
 from app.integrations.billing.base import WebhookVerificationError
 from app.modules.tenants.admin import build_platform_admin_service
@@ -193,7 +194,10 @@ async def impersonate_tenant(
     actor = AuditActor(
         user_id=user.id,
         role=user.role.value,
-        ip=request.client.host if request.client else None,
+        # Trusted-proxy resolution: an audit record naming the edge proxy
+        # instead of the staff member's real address would not be an audit
+        # trail (§10.11).
+        ip=client_ip(request, request.app.state.settings),
     )
     grant = await service.impersonate(tenant_id, actor=actor)
     return ImpersonationOut(
@@ -323,7 +327,7 @@ async def get_site_config(
         ident="_",
         ttl_seconds=settings.cache_site_config_ttl_seconds,
         loader=_load,
-        serialize=lambda v: v.model_dump(mode="json"),
+        dumps=lambda v: v.model_dump_json(),
         deserialize=SiteConfigOut.model_validate,
         enabled=settings.cache_enabled,
     )

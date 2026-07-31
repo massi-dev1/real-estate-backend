@@ -40,6 +40,7 @@ from app.core.exceptions import (
 )
 from app.core.lockout import LoginLockout
 from app.core.permissions import Role
+from app.core.rate_limit import client_ip
 from app.core.security import (
     create_access_token,
     generate_refresh_token,
@@ -93,10 +94,19 @@ class ClientInfo:
 
 
 def client_info(request: Request) -> ClientInfo:
+    """The caller's user agent and address, for the session row and the per-IP
+    lockout counter (§7.1).
+
+    The address goes through :func:`app.core.rate_limit.client_ip`, so behind
+    the §16 Caddy topology it is the real client rather than the proxy — the
+    per-IP lockout key is the anti-spray backstop, and pooling every request
+    under one proxy address would make it both useless (one attacker cannot be
+    isolated) and dangerous (one attacker locks out everyone).
+    """
     user_agent = request.headers.get("user-agent")
     return ClientInfo(
         user_agent=user_agent[:400] if user_agent else None,
-        ip=request.client.host if request.client else None,
+        ip=client_ip(request, request.app.state.settings),
     )
 
 

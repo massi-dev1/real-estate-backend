@@ -128,7 +128,10 @@ async def map_published_listings(
         ident=viewport,
         ttl_seconds=settings.cache_map_ttl_seconds,
         loader=_load,
-        serialize=lambda v: v.model_dump(mode="json"),
+        # model_dump_json encodes in one pass rather than building an
+        # intermediate dict for json.dumps to walk again — map cluster
+        # payloads are the largest thing cached here.
+        dumps=lambda v: v.model_dump_json(),
         deserialize=MapOut.model_validate,
         enabled=settings.cache_enabled,
     )

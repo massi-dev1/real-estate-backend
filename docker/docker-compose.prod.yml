@@ -30,6 +30,14 @@ services:
       APP_ENV: ${APP_ENV:-production}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
       RUN_MIGRATIONS: ${RUN_MIGRATIONS:-1}
+      # Caddy is the only thing that can reach the app in this topology (the
+      # app port is `expose`d, not published), and it sets X-Forwarded-For. It
+      # lives on the compose bridge network, so trusting that range makes rate
+      # limits and the login lockout key on the real client instead of pooling
+      # every request under the proxy's address. Override if your bridge subnet
+      # differs; never widen this to 0.0.0.0/0.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-1}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://app_user:app_password@db:5432/realestate}
       DATABASE_DDL_URL: ${DATABASE_DDL_URL:-postgresql+asyncpg://postgres:postgres@db:5432/realestate}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
