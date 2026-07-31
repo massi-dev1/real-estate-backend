@@ -10,7 +10,7 @@ import secrets
 import uuid
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 import structlog
 from fastapi import Depends, Request
@@ -43,6 +43,33 @@ from app.modules.tenants.usage import UsageService, UsageSnapshot, build_usage_b
 logger = structlog.get_logger(__name__)
 
 _KNOWN_PLANS = frozenset(PLANS)
+
+# ``settings`` namespaces that configure a backend integration and have no
+# public consumer. ``syndication`` holds each portal's partner ``api_key``.
+PRIVATE_SETTINGS_NAMESPACES = frozenset({"syndication"})
+
+# Substrings that mark a value as a credential wherever it appears in the blob.
+# Belt-and-braces behind the namespace drop above: a future namespace that
+# stores a secret is redacted even if nobody remembers to list it here.
+_SECRET_KEY_MARKERS = ("secret", "token", "password", "api_key", "apikey", "private_key")
+
+_REDACTED = "[redacted]"
+
+
+def _scrub_secrets(value: Any) -> Any:
+    """Recursively redact credential-shaped keys in a settings sub-tree."""
+    if isinstance(value, dict):
+        return {
+            key: (
+                _REDACTED
+                if any(marker in key.lower() for marker in _SECRET_KEY_MARKERS)
+                else _scrub_secrets(inner)
+            )
+            for key, inner in value.items()
+        }
+    if isinstance(value, list):
+        return [_scrub_secrets(item) for item in value]
+    return value
 
 
 def _new_verification_token() -> str:
@@ -228,6 +255,31 @@ class TenantService:
         self._invalidate_domains_after_commit([d.domain for d in tenant.domains])
         self._invalidate_site_config_after_commit(tenant_id)
         return await self._get_or_404(tenant_id)
+
+    @staticmethod
+    def public_settings(raw: dict[str, Any]) -> dict[str, Any]:
+        """The subset of ``tenants.settings`` safe to serve anonymously.
+
+        ``settings`` is a free-form JSONB blob the platform PATCHes, and agencies
+        keep arbitrary branding keys in it — so this cannot be a strict allowlist
+        without breaking their sites. It is instead a two-layer scrub:
+
+        1. Whole namespaces that exist only to configure a backend integration
+           are dropped (``syndication`` stores each portal's partner
+           ``api_key``). These have no public consumer at all.
+        2. Any key that names a credential is redacted at every depth, so a
+           namespace added later cannot silently reintroduce the leak.
+
+        Without this, ``GET /site/config`` — unauthenticated, resolved purely
+        from the Host header — returned the raw blob, publishing the very portal
+        API key that ``GET /portal/syndication/settings`` deliberately refuses
+        to echo back to the tenant's own admin.
+        """
+        return {
+            key: _scrub_secrets(value)
+            for key, value in raw.items()
+            if key not in PRIVATE_SETTINGS_NAMESPACES
+        }
 
     async def get_settings_key(self, tenant_id: uuid.UUID, key: str) -> dict[str, object]:
         """One top-level ``settings`` sub-object (e.g. ``syndication``), or an

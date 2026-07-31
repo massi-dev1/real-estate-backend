@@ -46,7 +46,7 @@ from app.modules.tenants.schemas import (
     UsageOut,
     WebhookAck,
 )
-from app.modules.tenants.service import TenantServiceDep
+from app.modules.tenants.service import TenantService, TenantServiceDep
 
 # Reads need PLATFORM_TENANT_VIEW (router-wide); mutations add PLATFORM_TENANT_MANAGE.
 _view = [Depends(require(Permission.PLATFORM_TENANT_VIEW))]
@@ -298,7 +298,9 @@ async def get_site_config(
         return SiteConfigOut(
             name=tenant.name,
             slug=tenant.slug,
-            settings=tenant.settings,
+            # Anonymous endpoint — never serve the raw blob, it carries the
+            # portal partner API keys (see TenantService.public_settings).
+            settings=TenantService.public_settings(tenant.settings),
             plan=tenant.plan,
             usage=UsageOut(
                 listings_count=snapshot.listings_count,

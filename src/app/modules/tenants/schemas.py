@@ -107,6 +107,10 @@ class UsageOut(OutSchema):
 class SiteConfigOut(OutSchema):
     """Public per-tenant site configuration (§4.4) — no internal fields.
 
+    ``settings`` is served through :meth:`TenantService.public_settings`, which
+    drops integration-only namespaces and redacts credential-shaped keys. This
+    endpoint is anonymous, so the raw blob must never be assigned here directly.
+
     Part 22 (§8.16) surfaces the plan, current usage and limits so the agency
     dashboard can render "42 / 100 listings used" without a second call.
     """
