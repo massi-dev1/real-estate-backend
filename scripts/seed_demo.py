@@ -92,6 +92,13 @@ STAFF: list[tuple[Role, str, str, str]] = [
     (Role.MARKETING, "marketing", "Yacine", "Boudiaf"),
 ]
 
+# Platform staff live *outside* every tenant (`tenant_id IS NULL`) and sign in
+# on a separate auth plane, so the console is unreachable without one. Seeded
+# here rather than left to `create_platform_admin.py` so a single command gives
+# a working environment for both surfaces.
+PLATFORM_EMAIL = f"platform@{DEMO_EMAIL_DOMAIN}"
+PLATFORM_PASSWORD = "PlatformPass123!"
+
 
 def _log(message: str) -> None:
     print(f"  {message}")
@@ -189,6 +196,32 @@ async def _ensure_users(session: AsyncSession, tenant_id: uuid.UUID) -> dict[str
         _log(f"user {email} ({role.value})")
     await session.flush()
     return users
+
+
+async def _ensure_platform_admin(session: AsyncSession) -> None:
+    """Create the platform-console operator.
+
+    Deliberately *not* tenant-scoped: `tenant_id` is NULL, which is what makes
+    an account platform staff. The identity RLS policy exposes exactly the
+    caller's partition, so this runs in the unscoped part of the seed — with a
+    tenant GUC set, the lookup below would not see an existing platform row and
+    every re-run would try to insert a duplicate.
+    """
+    service = UserService(UserRepository(session))
+    existing = await service.repo.get_by_email(None, PLATFORM_EMAIL)
+    if existing is not None:
+        return
+    await service.create_account(
+        None,
+        email=PLATFORM_EMAIL,
+        password=PLATFORM_PASSWORD,
+        role=Role.PLATFORM_ADMIN,
+        first_name="Sarah",
+        last_name="Idir",
+        locale="fr",
+    )
+    await session.flush()
+    _log(f"platform admin {PLATFORM_EMAIL}")
 
 
 # --------------------------------------------------------------------------
@@ -956,6 +989,12 @@ async def main() -> int:
             await _evict_tenant_cache(stale_domains)
 
         print(f"Seeding '{DEMO_SLUG}' ({DEMO_DOMAIN})")
+        # Platform staff first, in their own transaction: the block below sets
+        # the tenant GUC, and under it the identity RLS policy would hide an
+        # existing platform row — making the re-run try to insert a duplicate.
+        async with session_factory() as session, session.begin():
+            await _ensure_platform_admin(session)
+
         async with session_factory() as session, session.begin():
             tenant = await _ensure_tenant(session)
             ctx = _context(tenant)
@@ -977,6 +1016,10 @@ async def main() -> int:
     for role, local, _first, _last in STAFF:
         account = f"{local}@{DEMO_EMAIL_DOMAIN}"
         print(f"  {account:<26} {DEMO_PASSWORD}   ({role.value})")
+    print(
+        "\nPlatform console: http://localhost:3000/platform/login (bare host — it is tenant-exempt)"
+    )
+    print(f"  {PLATFORM_EMAIL:<26} {PLATFORM_PASSWORD}   (platform_admin)")
     return 0
 
 
