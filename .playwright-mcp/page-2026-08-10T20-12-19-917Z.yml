@@ -1,8 +1,0 @@
-- generic [active] [ref=f2e1]:
-  - button "Open Next.js Dev Tools" [ref=f2e22] [cursor=pointer]
-  - alert [ref=f2e26]: platform@demo.example
-  - main [ref=f2e27]:
-    - paragraph [ref=f2e28]: Console plateforme
-    - heading "platform@demo.example" [level=1] [ref=f2e29]
-    - paragraph [ref=f2e30]: Rôle platform_admin — accès multi-agences.
-    - button "Se déconnecter" [ref=f2e32]

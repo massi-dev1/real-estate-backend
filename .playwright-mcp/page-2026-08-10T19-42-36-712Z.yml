@@ -1,4 +1,0 @@
-- generic [active] [ref=f8e1]:
-  - status "Chargement" [ref=f8e2]
-  - button "Open Next.js Dev Tools" [ref=f8e9] [cursor=pointer]
-  - alert [ref=f8e13]
