@@ -2,6 +2,7 @@
 ``tenant_id`` (golden rule §5)."""
 
 import uuid
+from collections.abc import Collection
 from datetime import date, datetime
 
 from sqlalchemy import Select, and_, delete, func, or_, select, text
@@ -130,6 +131,67 @@ class AppointmentsRepository:
             )
         stmt = stmt.order_by(Appointment.start_at, Appointment.id).limit(limit + 1)
         return list((await self.session.execute(stmt)).scalars())
+
+    async def list_for_contacts(
+        self,
+        tenant_id: uuid.UUID,
+        contact_ids: Collection[uuid.UUID],
+        *,
+        upcoming_only: bool,
+        now: datetime,
+        after: tuple[datetime, uuid.UUID] | None,
+        limit: int,
+    ) -> list[Appointment]:
+        """Keyset page of a *visitor's own* tours, scoped by contact rather
+        than by agent — the buyer-side counterpart to ``list_page``. Ordered
+        (start_at ASC, id ASC): "what's next" is the question a buyer asks.
+        Returns limit+1 rows. An empty ``contact_ids`` yields nothing rather
+        than an unscoped query (fail-closed)."""
+        if not contact_ids:
+            return []
+        stmt = select(Appointment).where(
+            Appointment.tenant_id == tenant_id,
+            Appointment.contact_id.in_(list(contact_ids)),
+        )
+        if upcoming_only:
+            stmt = stmt.where(
+                Appointment.start_at >= now,
+                Appointment.status.in_(ACTIVE_STATUSES),
+            )
+        if after is not None:
+            stmt = stmt.where(
+                or_(
+                    Appointment.start_at > after[0],
+                    and_(Appointment.start_at == after[0], Appointment.id > after[1]),
+                )
+            )
+        stmt = stmt.order_by(Appointment.start_at, Appointment.id).limit(limit + 1)
+        return list((await self.session.execute(stmt)).scalars())
+
+    async def count_for_contacts(
+        self,
+        tenant_id: uuid.UUID,
+        contact_ids: Collection[uuid.UUID],
+        *,
+        upcoming_only: bool,
+        now: datetime,
+    ) -> int:
+        if not contact_ids:
+            return 0
+        stmt = (
+            select(func.count())
+            .select_from(Appointment)
+            .where(
+                Appointment.tenant_id == tenant_id,
+                Appointment.contact_id.in_(list(contact_ids)),
+            )
+        )
+        if upcoming_only:
+            stmt = stmt.where(
+                Appointment.start_at >= now,
+                Appointment.status.in_(ACTIVE_STATUSES),
+            )
+        return (await self.session.execute(stmt)).scalar_one()
 
     async def count(
         self,

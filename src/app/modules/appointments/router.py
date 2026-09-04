@@ -3,6 +3,8 @@
 - ``public_router`` — slot search + tour booking on a published agent's
   public profile (rate limited, honeypot-camouflaged like lead capture), and
   the secret-URL iCal feed.
+- ``me_router`` — a signed-in visitor's own tours. Ownership is the
+  authorization (no RBAC permission), like favorites and notifications.
 - ``portal_router`` — the agent/manager agenda: list/detail, lifecycle
   transitions, availability editing (keyed by agent profile, ownership via
   the agents service) and iCal URL minting.
@@ -25,6 +27,7 @@ from app.modules.appointments.schemas import (
     AvailabilityPut,
     AvailabilityRuleOut,
     IcalUrlOut,
+    MyAppointmentOut,
     SlotOut,
     TourBookingCreate,
     TourBookingOut,
@@ -83,6 +86,30 @@ async def ical_feed(
 ) -> Response:
     body = await service.ical_feed(tenant, token)
     return Response(content=body, media_type="text/calendar")
+
+
+me_router = APIRouter(prefix="/me", tags=["appointments:me"])
+
+
+@me_router.get("/appointments")
+async def list_my_appointments(
+    tenant: TenantDep,
+    service: AppointmentsServiceDep,
+    actor: CurrentUserDep,
+    upcoming_only: bool = Query(default=False, alias="upcomingOnly"),
+    cursor: str | None = Query(default=None),
+    limit: int | None = Query(default=None, ge=1, le=MAX_PAGE_SIZE),
+) -> Page[MyAppointmentOut]:
+    """A signed-in visitor's own tour requests. Ownership is the authorization
+    (no RBAC permission), matching favorites and notifications."""
+    items, next_cursor, total = await service.list_for_visitor(
+        tenant, actor, upcoming_only=upcoming_only, cursor=cursor, limit=limit
+    )
+    return Page(
+        items=[MyAppointmentOut.model_validate(x) for x in items],
+        next_cursor=next_cursor,
+        total_estimate=total,
+    )
 
 
 portal_router = APIRouter(prefix="/portal", tags=["appointments:portal"])

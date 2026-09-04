@@ -34,6 +34,7 @@ from app.modules.listings.schemas import (
     MapOut,
     MapPinOut,
     MapQuery,
+    PortalSort,
     PublicListingOut,
     PublicListingQuery,
     StatusHistoryOut,
@@ -251,11 +252,13 @@ async def list_listings(
     service: ListingServiceDep,
     actor: AuthenticatedUser = Depends(require(Permission.LISTING_MANAGE)),
     status_filter: ListingStatus | None = Query(default=None, alias="status"),
+    q: str | None = Query(default=None, max_length=200),
+    sort: PortalSort = Query(default=PortalSort.NEWEST),
     cursor: str | None = Query(default=None),
     limit: int | None = Query(default=None, ge=1, le=MAX_PAGE_SIZE),
 ) -> Page[ListingOut]:
     items, next_cursor, total = await service.list_portal(
-        tenant, actor, status=status_filter, cursor=cursor, limit=limit
+        tenant, actor, status=status_filter, q=q, sort=sort, cursor=cursor, limit=limit
     )
     return Page(
         items=[ListingOut.model_validate(x) for x in items],

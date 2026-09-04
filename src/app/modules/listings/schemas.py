@@ -266,6 +266,19 @@ class SearchSort(enum.StrEnum):
     AREA_DESC = "area_desc"
 
 
+class PortalSort(enum.StrEnum):
+    """Back-office sort options. Deliberately a separate enum from
+    ``SearchSort``: the portal has no ``featured``-leads rule (that is paid
+    public placement, meaningless when managing inventory) and it sorts by
+    ``updated_at`` — "what did I touch last" is the question an agent asks of
+    their own list, which the public site never needs."""
+
+    NEWEST = "newest"
+    UPDATED = "updated"
+    PRICE_ASC = "price_asc"
+    PRICE_DESC = "price_desc"
+
+
 DEFAULT_NEAR_RADIUS_KM = 5.0
 MAX_POLYGON_POINTS = 100
 

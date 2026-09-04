@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import APIRouter, FastAPI
+from fastapi.openapi.utils import get_openapi
 from redis.asyncio import Redis
 
 from app.core.config import Settings, get_settings
@@ -29,6 +30,7 @@ from app.modules.analytics.router import public_router as analytics_public_route
 from app.modules.appointments.router import (
     booking_idempotent_router as appointments_booking_idempotent_router,
 )
+from app.modules.appointments.router import me_router as appointments_me_router
 from app.modules.appointments.router import portal_router as appointments_portal_router
 from app.modules.appointments.router import public_router as appointments_public_router
 from app.modules.auth.router import auth_router, platform_auth_router
@@ -67,6 +69,18 @@ from app.modules.transactions.router import portal_router as transactions_portal
 from app.modules.users.router import staff_router, users_router
 from app.modules.valuations.router import public_router as valuations_public_router
 from app.modules.webhooks.router import portal_router as webhooks_portal_router
+
+# Task bodies use `@shared_task`, which binds to Celery's *current* app. Nothing
+# else in the API process imports the configured app, so without this import the
+# current app is an unconfigured default whose broker_url is None — kombu then
+# falls back to AMQP/RabbitMQ on :5672 and every request-path `.delay()` (welcome
+# email, media processing, notifications) fails with a connection refusal instead
+# of enqueueing to Redis. Worse, the failure is silent from the caller's side:
+# the post-commit enqueue happens after the response is sent, so the request
+# still returns 201 and the job is simply lost. Importing the module configures
+# the app and calls set_current(); `app.workers.db` does the same for the
+# worker-thread path (the Part 8 finding).
+from app.workers import celery_app as _celery_app  # noqa: F401
 
 logger = structlog.get_logger(__name__)
 
@@ -126,6 +140,7 @@ def build_api_v1_router() -> APIRouter:
     router.include_router(favorites_public_router)
     router.include_router(appointments_public_router)
     router.include_router(appointments_booking_idempotent_router)
+    router.include_router(appointments_me_router)
     router.include_router(appointments_portal_router)
     router.include_router(valuations_public_router)
     router.include_router(content_public_router)
@@ -199,6 +214,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(internal_router)
     app.include_router(build_api_v1_router())
+
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+        openapi_schema = get_openapi(
+            title=app.title,
+            version="1.0.0",
+            description="Real Estate Multi-Tenant API",
+            routes=app.routes,
+        )
+        openapi_schema["components"]["securitySchemes"] = {
+            "HTTPBearer": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "Enter JWT Bearer token (without 'Bearer ' prefix)."
+            }
+        }
+        openapi_schema["security"] = [{"HTTPBearer": []}]
+        app.openapi_schema = openapi_schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi
     return app
 
 

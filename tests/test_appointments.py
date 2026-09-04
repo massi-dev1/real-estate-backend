@@ -17,10 +17,11 @@ from app.core.database import set_tenant_guc
 from app.core.permissions import Role
 from app.modules.appointments.models import Appointment
 from app.workers.tasks.appointments import send_tour_reminders
-from tests.helpers import HOST_A
+from tests.helpers import HOST_A, HOST_B, bearer, mailpit_code, register_user
 from tests.test_agents import make_profile, publish_profile
 from tests.test_leads import PORTAL_LEADS, mailpit_count
 from tests.test_listings import add_user, make_listing, tenant_and_login, transition
+from tests.test_tenants_platform_api import create_tenant
 
 CreateTenantUser = Callable[..., Awaitable[uuid.UUID]]
 
@@ -448,3 +449,202 @@ async def test_ical_feed_secret_url(
     # A tampered token is a plain 404 — no oracle.
     forged = await client.get(url + "0", headers={"Host": HOST_A})
     assert forged.status_code == 404
+
+
+# ---- buyer-side tour list (/me/appointments) ----
+
+ME_APPOINTMENTS = "/api/v1/me/appointments"
+
+
+async def _verified_buyer(client: AsyncClient, email: str) -> dict[str, str]:
+    """Register a buyer and complete the real email-verification flow — the
+    /me tour list joins on a *verified* address, so a fixture-inserted user
+    with a NULL emailVerifiedAt would not exercise the happy path."""
+    resp = await register_user(client, HOST_A, email=email)
+    assert resp.status_code == 201, resp.text
+    headers = {"Host": HOST_A, "Authorization": bearer(resp)}
+    code = await mailpit_code(email, "Verify")
+    verified = await client.post(
+        "/api/v1/auth/verify-email", json={"token": code}, headers={"Host": HOST_A}
+    )
+    assert verified.status_code == 204, verified.text
+    return headers
+
+
+async def test_visitor_sees_own_tours_after_booking(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """A tour booked anonymously shows up in the buyer's account: the join is
+    by CRM contact via the verified email, since the booking carries no user id."""
+    _, admin, _, agent_id, _ = await setup_published_agent(
+        client, platform_headers, create_tenant_user, rules=weekly_rules()
+    )
+    email = "tour-buyer@example.com"
+    buyer = await _verified_buyer(client, email)
+
+    # Nothing booked yet.
+    empty = await client.get(ME_APPOINTMENTS, headers=buyer)
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["items"] == []
+    assert empty.json()["totalEstimate"] == 0
+
+    day = tomorrow()
+    booked = await book(client, slot_at(day, 10), email=email)
+    assert booked.status_code == 201, booked.text
+
+    listed = await client.get(ME_APPOINTMENTS, headers=buyer)
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert [x["id"] for x in body["items"]] == [booked.json()["id"]]
+    assert body["totalEstimate"] == 1
+
+    row = body["items"][0]
+    assert row["status"] == "requested"
+    assert row["agentUserId"] == agent_id
+    # Internal bookkeeping must not reach the visitor.
+    # NB the capital H: to_camel renders these as "24H"/"1H", so the lowercase
+    # spelling would assert the absence of a field that never existed.
+    for leaked in ("contactId", "leadId", "reminder24HSentAt", "reminder1HSentAt"):
+        assert leaked not in row, f"{leaked} leaked to the visitor"
+
+    # A confirmation by the agency is reflected on the buyer's side.
+    confirmed = await client.post(
+        f"{PORTAL_APPOINTMENTS}/{booked.json()['id']}/status",
+        json={"toStatus": "confirmed"},
+        headers=admin,
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    again = await client.get(ME_APPOINTMENTS, headers=buyer)
+    assert again.json()["items"][0]["status"] == "confirmed"
+    assert again.json()["items"][0]["confirmedAt"] is not None
+
+
+async def test_visitor_never_sees_another_persons_tours(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """The list is scoped to the caller's own contact, not the tenant."""
+    await setup_published_agent(client, platform_headers, create_tenant_user, rules=weekly_rules())
+    mine = "mine@example.com"
+    theirs = "theirs@example.com"
+    buyer = await _verified_buyer(client, mine)
+
+    day = tomorrow()
+    ours = await book(client, slot_at(day, 10), email=mine)
+    assert ours.status_code == 201, ours.text
+    other = await book(client, slot_at(day, 11), email=theirs)
+    assert other.status_code == 201, other.text
+
+    listed = await client.get(ME_APPOINTMENTS, headers=buyer)
+    ids = [x["id"] for x in listed.json()["items"]]
+    assert ids == [ours.json()["id"]]
+    assert other.json()["id"] not in ids
+
+
+async def test_unverified_email_yields_an_empty_tour_list(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """Anyone can register claiming any address. Joining on an unverified one
+    would hand a stranger's tour history to whoever typed their address first,
+    so an unverified caller sees nothing — and gets a 200, not a 403, which
+    would itself confirm the address is in the CRM."""
+    await setup_published_agent(client, platform_headers, create_tenant_user, rules=weekly_rules())
+    email = "unverified@example.com"
+    booked = await book(client, slot_at(tomorrow(), 10), email=email)
+    assert booked.status_code == 201, booked.text
+
+    # Same address, but the account never completed verification.
+    resp = await register_user(client, HOST_A, email=email)
+    assert resp.status_code == 201, resp.text
+    impostor = {"Host": HOST_A, "Authorization": bearer(resp)}
+
+    listed = await client.get(ME_APPOINTMENTS, headers=impostor)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"] == []
+    assert listed.json()["totalEstimate"] == 0
+
+
+async def test_tour_list_requires_authentication(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    await setup_published_agent(client, platform_headers, create_tenant_user)
+    anon = await client.get(ME_APPOINTMENTS, headers={"Host": HOST_A})
+    assert anon.status_code == 401
+
+
+async def test_upcoming_only_filters_past_and_dead_tours(
+    client: AsyncClient,
+    app: FastAPI,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """``upcomingOnly`` answers "what's next": past tours and cancelled ones
+    drop out, while the unfiltered list keeps the full history."""
+    tenant, admin, _, _, _ = await setup_published_agent(
+        client, platform_headers, create_tenant_user, rules=weekly_rules()
+    )
+    email = "history@example.com"
+    buyer = await _verified_buyer(client, email)
+
+    day = tomorrow()
+    upcoming = await book(client, slot_at(day, 10), email=email)
+    cancelled = await book(client, slot_at(day, 11), email=email)
+    past = await book(client, slot_at(day, 9), email=email)
+    for resp in (upcoming, cancelled, past):
+        assert resp.status_code == 201, resp.text
+
+    # Cancel one, and drag another into the past (booking is future-only).
+    killed = await client.post(
+        f"{PORTAL_APPOINTMENTS}/{cancelled.json()['id']}/status",
+        json={"toStatus": "cancelled"},
+        headers=admin,
+    )
+    assert killed.status_code == 200, killed.text
+    async with app.state.session_factory() as session, session.begin():
+        await set_tenant_guc(session, uuid.UUID(str(tenant["id"])))
+        await session.execute(
+            update(Appointment)
+            .where(Appointment.id == uuid.UUID(past.json()["id"]))
+            .values(
+                start_at=datetime.now(UTC) - timedelta(days=2),
+                end_at=datetime.now(UTC) - timedelta(days=2) + timedelta(hours=1),
+            )
+        )
+
+    filtered = await client.get(ME_APPOINTMENTS, params={"upcomingOnly": True}, headers=buyer)
+    assert [x["id"] for x in filtered.json()["items"]] == [upcoming.json()["id"]]
+    assert filtered.json()["totalEstimate"] == 1
+
+    everything = await client.get(ME_APPOINTMENTS, headers=buyer)
+    assert len(everything.json()["items"]) == 3
+    # Ordered by start_at ascending — the past one leads the full history.
+    assert everything.json()["items"][0]["id"] == past.json()["id"]
+
+
+async def test_tour_list_token_is_pinned_to_its_tenant(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """An access token minted on agency A cannot read the tour list on B."""
+    await setup_published_agent(client, platform_headers, create_tenant_user, rules=weekly_rules())
+    email = "cross@example.com"
+    buyer = await _verified_buyer(client, email)
+    booked = await book(client, slot_at(tomorrow(), 10), email=email)
+    assert booked.status_code == 201, booked.text
+
+    mine = await client.get(ME_APPOINTMENTS, headers=buyer)
+    assert [x["id"] for x in mine.json()["items"]] == [booked.json()["id"]]
+
+    await create_tenant(client, platform_headers, name="Agency B", slug="agency-b", domain=HOST_B)
+    refused = await client.get(
+        ME_APPOINTMENTS, headers={"Host": HOST_B, "Authorization": buyer["Authorization"]}
+    )
+    assert refused.status_code in (401, 403)

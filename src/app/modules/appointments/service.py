@@ -42,6 +42,7 @@ from app.modules.appointments.schemas import (
 )
 from app.modules.leads.service import LeadsService, get_leads_service
 from app.modules.listings.service import ListingService, get_listing_service
+from app.modules.users.service import UserService, get_user_service
 from app.workers.tasks.email import send_email
 
 logger = structlog.get_logger(__name__)
@@ -101,12 +102,14 @@ class AppointmentsService:
         agents: AgentsService,
         leads: LeadsService,
         listings: ListingService,
+        users: UserService,
         settings: Settings,
     ) -> None:
         self.repo = repo
         self.agents = agents
         self.leads = leads
         self.listings = listings
+        self.users = users
         self.settings = settings
 
     # ---- availability (portal, keyed by agent profile) ----
@@ -344,6 +347,57 @@ class AppointmentsService:
         )
         return items, next_cursor, total
 
+    async def list_for_visitor(
+        self,
+        tenant: TenantContext,
+        actor: AuthenticatedUser,
+        *,
+        upcoming_only: bool,
+        cursor: str | None,
+        limit: int | None,
+    ) -> tuple[list[Appointment], str | None, int]:
+        """A signed-in visitor's own tours (``/me/appointments``).
+
+        Ownership *is* the authorization — no RBAC permission, same stance as
+        favorites and notifications. The join is by CRM contact, not user id: a
+        tour is booked anonymously from a public agent page, so the appointment
+        row carries ``contact_id`` and never a ``user_id``. Email ties the two
+        together, exactly as the DSR export does (§10.12).
+
+        The email must be **verified**. Anyone can register an account claiming
+        any address, so joining on an unverified one would hand a stranger's
+        tour history — contact id, listing, agent, times — to whoever typed
+        their address first. An unverified caller gets an empty page, not a
+        403: the tours may simply not exist, and saying which would leak that
+        the address is in the CRM at all.
+        """
+        page_size = clamp_limit(limit)
+        after = _decode_keyset(cursor) if cursor else None
+        user = await self.users.get(tenant.id, actor.id)
+        if user.email_verified_at is None:
+            return [], None, 0
+        contact_ids = await self.leads.contact_ids_for_email(tenant.id, user.email)
+        now = datetime.now(UTC)
+        rows = await self.repo.list_for_contacts(
+            tenant.id,
+            contact_ids,
+            upcoming_only=upcoming_only,
+            now=now,
+            after=after,
+            limit=page_size,
+        )
+        items = rows[:page_size]
+        next_cursor = None
+        if len(rows) > page_size:
+            last = items[-1]
+            next_cursor = encode_cursor(
+                {"start_at": _as_utc(last.start_at).isoformat(), "id": str(last.id)}
+            )
+        total = await self.repo.count_for_contacts(
+            tenant.id, contact_ids, upcoming_only=upcoming_only, now=now
+        )
+        return items, next_cursor, total
+
     async def transition(
         self,
         tenant: TenantContext,
@@ -487,6 +541,7 @@ def get_appointments_service(session: SessionDep, request: Request) -> Appointme
         build_agents_boundary(session),
         get_leads_service(session),
         get_listing_service(session),
+        get_user_service(session),
         request.app.state.settings,
     )
 

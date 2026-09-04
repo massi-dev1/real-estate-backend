@@ -6,6 +6,7 @@ pipeline (§8.2), ``sync`` for portal/geocoding work,
 sitting in ``default``. Beat drives scheduled jobs from this same app.
 """
 
+import pkgutil
 from typing import Any
 
 from celery import Celery
@@ -14,6 +15,7 @@ from celery.signals import worker_process_init
 
 from app.core.config import get_settings
 from app.core.telemetry import init_sentry, instrument_celery
+from app.workers import tasks as _task_package
 
 settings = get_settings()
 
@@ -87,7 +89,16 @@ celery_app.conf.update(
     enable_utc=True,
 )
 
-celery_app.autodiscover_tasks(["app.workers.tasks"])
+# `autodiscover_tasks(["app.workers.tasks"])` does NOT work here: it treats each
+# entry as a *package* and looks for a `tasks` submodule inside it — i.e.
+# `app.workers.tasks.tasks`, which does not exist — so the worker started with
+# zero registered tasks and every `.delay()` would fail with NotRegistered.
+# The task modules are siblings under one package, so enumerate and import them.
+celery_app.conf.imports = tuple(
+    f"app.workers.tasks.{module.name}"
+    for module in pkgutil.iter_modules(_task_package.__path__)
+    if not module.name.startswith("_")
+)
 
 
 @worker_process_init.connect

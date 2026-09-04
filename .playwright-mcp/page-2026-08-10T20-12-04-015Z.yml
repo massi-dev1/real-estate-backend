@@ -1,0 +1,17 @@
+- generic [ref=f2e1]:
+  - main [ref=f2e2]:
+    - generic [ref=f2e3]:
+      - generic [ref=f2e4]:
+        - heading "Console plateforme" [level=1] [ref=f2e5]
+        - paragraph [ref=f2e6]: Réservé au personnel de la plateforme.
+        - generic [ref=f2e8]:
+          - generic [ref=f2e9]:
+            - generic [ref=f2e10]: Adresse e-mail
+            - textbox "Adresse e-mail" [active] [ref=f2e11]
+          - generic [ref=f2e12]:
+            - generic [ref=f2e13]: Mot de passe
+            - textbox "Mot de passe" [ref=f2e14]
+          - button "Se connecter" [ref=f2e15]
+      - generic [ref=f2e16]: Vous cherchez l’espace de votre agence ? Utilisez l’adresse de celle-ci.
+  - button "Open Next.js Dev Tools" [ref=f2e22] [cursor=pointer]
+  - alert [ref=f2e26]

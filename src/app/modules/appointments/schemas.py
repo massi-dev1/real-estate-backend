@@ -94,6 +94,25 @@ class AppointmentOut(OutSchema):
     updated_at: datetime
 
 
+class MyAppointmentOut(OutSchema):
+    """A visitor's own tour, for ``/me/appointments``.
+
+    Deliberately a narrower shape than the portal's ``AppointmentOut``: the
+    reminder-dispatch stamps and ``contactId`` are internal bookkeeping, and
+    ``leadId`` exposes that the visitor is a tracked CRM record — none of it is
+    the visitor's business, so none of it is on the wire.
+    """
+
+    id: uuid.UUID
+    agent_user_id: uuid.UUID
+    listing_id: uuid.UUID | None
+    status: AppointmentStatus
+    start_at: datetime
+    end_at: datetime
+    confirmed_at: datetime | None
+    created_at: datetime
+
+
 class AppointmentTransitionRequest(InputSchema):
     to_status: AppointmentStatus
 

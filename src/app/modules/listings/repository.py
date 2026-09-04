@@ -17,6 +17,7 @@ from sqlalchemy import (
     ColumnElement,
     Row,
     Select,
+    Text,
     and_,
     cast,
     false,
@@ -36,7 +37,7 @@ from app.modules.listings.models import (
     ListingStatusHistory,
     PropertyType,
 )
-from app.modules.listings.schemas import PublicListingFilters, SearchSort
+from app.modules.listings.schemas import PortalSort, PublicListingFilters, SearchSort
 
 # locale → text-search config. Queries must be parsed with a config from the
 # same family the search_vector was built with (migration 0006).
@@ -45,6 +46,24 @@ LOCALE_TS_CONFIG: dict[str, str] = {"fr": "french", "en": "english", "ar": "arab
 # (featured, sort-key value, id) — the public keyset. The key's Python type
 # follows the sort (datetime for newest, Decimal for price/area).
 PublicKeyset = tuple[bool, Any, uuid.UUID]
+
+
+def _portal_sort_key(
+    sort: PortalSort,
+) -> tuple[ColumnElement[Any] | InstrumentedAttribute[Any], bool]:
+    """The portal sort's key expression and whether it descends. Unlike the
+    public keyset there is no ``featured`` leading column — see ``PortalSort``.
+    Every key here is NOT NULL (``created_at``/``updated_at``/``price``), so no
+    ``coalesce`` is needed to keep the keyset total-ordered."""
+    match sort:
+        case PortalSort.UPDATED:
+            return Listing.updated_at, True
+        case PortalSort.PRICE_ASC:
+            return Listing.price, False
+        case PortalSort.PRICE_DESC:
+            return Listing.price, True
+        case _:
+            return Listing.created_at, True
 
 
 def _sort_key(sort: SearchSort) -> tuple[ColumnElement[Any] | InstrumentedAttribute[Any], bool]:
@@ -105,27 +124,61 @@ class ListingRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
+    def _portal_filtered(
+        self,
+        tenant_id: uuid.UUID,
+        *,
+        scope_user_ids: Collection[uuid.UUID] | None,
+        status: ListingStatus | None,
+        q: str | None,
+    ) -> Select[tuple[Listing]]:
+        """Portal rows narrowed by status and the back-office keyword search.
+
+        Deliberately *not* ``_published_filtered``: that builder is pinned to
+        ``status == published`` and tuned for the public site, whereas an agent
+        manages drafts and archived rows too. The keyword match is also a
+        different question — an agent searches by *reference code* far more
+        often than by prose, and the FTS ``search_vector`` does not index it —
+        so this is an ILIKE across reference code, the title's locales and the
+        city rather than a ``websearch_to_tsquery``.
+        """
+        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids)
+        if status is not None:
+            stmt = stmt.where(Listing.status == status)
+        if q:
+            pattern = f"%{q.strip().lower()}%"
+            stmt = stmt.where(
+                or_(
+                    func.lower(Listing.reference_code).like(pattern),
+                    # jsonb_each_text over the i18n title: matches whichever
+                    # locale the agent happens to be typing in.
+                    func.lower(cast(Listing.title, Text)).like(pattern),
+                    func.lower(Listing.address["city"].astext).like(pattern),
+                )
+            )
+        return stmt
+
     async def list_portal(
         self,
         tenant_id: uuid.UUID,
         *,
         scope_user_ids: Collection[uuid.UUID] | None,
         status: ListingStatus | None,
-        after: tuple[datetime, uuid.UUID] | None,
+        q: str | None = None,
+        sort: PortalSort = PortalSort.NEWEST,
+        after: tuple[Any, uuid.UUID] | None,
         limit: int,
     ) -> list[Listing]:
-        """Keyset page on (created_at DESC, id DESC); returns limit+1 rows."""
-        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids)
-        if status is not None:
-            stmt = stmt.where(Listing.status == status)
+        """Keyset page on (sort key, id); returns limit+1 rows. ``id`` breaks
+        ties in the same direction as the key so the ordering stays total."""
+        stmt = self._portal_filtered(tenant_id, scope_user_ids=scope_user_ids, status=status, q=q)
+        key, descending = _portal_sort_key(sort)
         if after is not None:
-            stmt = stmt.where(
-                or_(
-                    Listing.created_at < after[0],
-                    and_(Listing.created_at == after[0], Listing.id < after[1]),
-                )
-            )
-        stmt = stmt.order_by(Listing.created_at.desc(), Listing.id.desc()).limit(limit + 1)
+            past = key < after[0] if descending else key > after[0]
+            tie = Listing.id < after[1] if descending else Listing.id > after[1]
+            stmt = stmt.where(or_(past, and_(key == after[0], tie)))
+        order = (key.desc(), Listing.id.desc()) if descending else (key.asc(), Listing.id.asc())
+        stmt = stmt.order_by(*order).limit(limit + 1)
         return list((await self.session.execute(stmt)).scalars())
 
     def _published_filtered(
@@ -411,10 +464,14 @@ class ListingRepository:
         *,
         scope_user_ids: Collection[uuid.UUID] | None = None,
         status: ListingStatus | None = None,
+        q: str | None = None,
     ) -> int:
-        stmt = self._base(tenant_id, scope_user_ids=scope_user_ids).with_only_columns(func.count())
-        if status is not None:
-            stmt = stmt.where(Listing.status == status)
+        """Shares ``_portal_filtered`` with ``list_portal`` so the reported
+        total always matches the page the caller is actually reading — a count
+        that ignored ``q`` would tell an agent "142 results" over a 3-row page."""
+        stmt = self._portal_filtered(
+            tenant_id, scope_user_ids=scope_user_ids, status=status, q=q
+        ).with_only_columns(func.count())
         return (await self.session.execute(stmt)).scalar_one()
 
     async def scoped_listing_ids(

@@ -51,6 +51,7 @@ from app.modules.listings.schemas import (
     GenerateDescriptionRequest,
     ListingCreate,
     ListingUpdate,
+    PortalSort,
     PublicListingFilters,
     SearchSort,
 )
@@ -321,23 +322,31 @@ class ListingService:
         actor: AuthenticatedUser,
         *,
         status: ListingStatus | None,
+        q: str | None = None,
+        sort: PortalSort = PortalSort.NEWEST,
         cursor: str | None,
         limit: int | None,
     ) -> tuple[list[Listing], str | None, int]:
+        """The back-office inventory list: ownership-scoped, optionally
+        narrowed by status and a keyword (reference code / title / city), and
+        sortable. ``q`` and ``sort`` are portal-only — the public search has its
+        own richer filter set (§8.3) which is published-only and irrelevant to
+        an agent managing drafts."""
         page_size = clamp_limit(limit)
-        after = _decode_keyset(cursor, "created_at") if cursor else None
+        after = _decode_portal_cursor(cursor, sort) if cursor else None
         scope = await self._scope_for(tenant.id, actor)
         rows = await self.repo.list_portal(
-            tenant.id, scope_user_ids=scope, status=status, after=after, limit=page_size
+            tenant.id,
+            scope_user_ids=scope,
+            status=status,
+            q=q,
+            sort=sort,
+            after=after,
+            limit=page_size,
         )
         items = rows[:page_size]
-        next_cursor = None
-        if len(rows) > page_size:
-            last = items[-1]
-            next_cursor = encode_cursor(
-                {"created_at": last.created_at.isoformat(), "id": str(last.id)}
-            )
-        total = await self.repo.count(tenant.id, scope_user_ids=scope, status=status)
+        next_cursor = _encode_portal_cursor(items[-1], sort) if len(rows) > page_size else None
+        total = await self.repo.count(tenant.id, scope_user_ids=scope, status=status, q=q)
         return items, next_cursor, total
 
     async def soft_delete(
@@ -795,6 +804,37 @@ def _decode_public_cursor(cursor: str, sort: SearchSort) -> PublicKeyset:
             else Decimal(values["key"])
         )
         return bool(values["featured"]), key, uuid.UUID(values["id"])
+    except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
+        raise InvalidCursorError("The provided cursor is malformed.") from exc
+
+
+def _encode_portal_cursor(last: Listing, sort: PortalSort) -> str:
+    """Mirrors ``_encode_public_cursor``: the cursor carries the sort it was
+    minted under so a client that changes ``sort`` mid-page gets a clean 400
+    instead of a silently mis-ordered page."""
+    match sort:
+        case PortalSort.UPDATED:
+            key: Any = last.updated_at.isoformat()
+        case PortalSort.PRICE_ASC | PortalSort.PRICE_DESC:
+            key = str(last.price)
+        case _:
+            key = last.created_at.isoformat()
+    return encode_cursor({"sort": sort.value, "key": key, "id": str(last.id)})
+
+
+def _decode_portal_cursor(cursor: str, sort: PortalSort) -> tuple[Any, uuid.UUID]:
+    values = decode_cursor(cursor)
+    try:
+        if values["sort"] != sort.value:
+            # A cursor only orders the sort it was minted under.
+            raise InvalidCursorError("The cursor does not match the requested sort.")
+        raw = values["key"]
+        key: Any = (
+            Decimal(raw)
+            if sort in (PortalSort.PRICE_ASC, PortalSort.PRICE_DESC)
+            else datetime.fromisoformat(raw)
+        )
+        return key, uuid.UUID(values["id"])
     except (KeyError, TypeError, ValueError, InvalidOperation) as exc:
         raise InvalidCursorError("The provided cursor is malformed.") from exc
 

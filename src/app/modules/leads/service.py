@@ -962,6 +962,18 @@ class LeadsService:
         ``lead_exists``)."""
         return await self.repo.get_contact(tenant_id, contact_id) is not None
 
+    async def contact_ids_for_email(self, tenant_id: uuid.UUID, email: str) -> list[uuid.UUID]:
+        """The CRM contact ids belonging to an email address.
+
+        Boundary accessor for the buyer-side tour list (§8.7): a visitor books
+        a tour anonymously, so the appointment carries a ``contact_id`` and no
+        ``user_id``. Email is the join — the same identity ``export_for_subject``
+        uses to tie a portal account to its CRM footprint (§10.12). Returns a
+        list because dedupe is merge-fill on email-then-phone, so an address can
+        legitimately map to more than one contact row."""
+        contacts = await self.repo.contacts_by_email(tenant_id, email)
+        return [c.id for c in contacts]
+
     # ---- compliance boundary (§8.17): DSR export, erasure, retention ----
 
     async def export_for_subject(self, tenant_id: uuid.UUID, email: str) -> dict[str, Any]:

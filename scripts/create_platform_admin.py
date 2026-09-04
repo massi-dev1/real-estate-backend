@@ -17,6 +17,12 @@ import sys
 from app.core.config import get_settings
 from app.core.database import create_engine, create_session_factory
 from app.core.permissions import Role
+
+# `users.tenant_id` carries an FK to `tenants`, which SQLAlchemy resolves lazily
+# on first use. Importing the users module alone leaves `tenants` absent from
+# Base.metadata and the mapper raises NoReferencedTableError, so pull in the
+# model registry (which imports every module's models) before the repository.
+from app.modules.tenants import models as _tenant_models  # noqa: F401
 from app.modules.users.repository import UserRepository
 from app.modules.users.service import UserService
 

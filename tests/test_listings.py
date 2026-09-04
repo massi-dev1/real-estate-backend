@@ -598,3 +598,142 @@ async def test_pagination_cursors(
     # Status filter narrows portal lists.
     drafts = await client.get("/api/v1/portal/listings", params={"status": "draft"}, headers=admin)
     assert drafts.json()["items"] == []
+
+
+# ---- portal keyword search & sort ----
+
+
+async def test_portal_search_matches_reference_code_title_and_city(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """The back-office list is searchable by the things an agent actually types:
+    a reference code, a word from any locale of the title, or the city."""
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    target = await make_listing(
+        client,
+        admin,
+        title={"fr": "Villa avec piscine", "ar": "فيلا مع مسبح"},
+        address={"city": "Oran", "country": "DZ"},
+    )
+    await make_listing(
+        client,
+        admin,
+        title={"fr": "Studio centre-ville"},
+        address={"city": "Alger", "country": "DZ"},
+    )
+
+    async def search(q: str) -> list[dict[str, Any]]:
+        resp = await client.get("/api/v1/portal/listings", params={"q": q}, headers=admin)
+        assert resp.status_code == 200, resp.text
+        return list(resp.json()["items"])
+
+    # Reference code — the FTS search_vector does not index it, which is why
+    # this is an ILIKE and not a websearch_to_tsquery.
+    assert [x["id"] for x in await search(target["referenceCode"])] == [target["id"]]
+    # Title, in the locale the agent happens to be typing.
+    assert [x["id"] for x in await search("piscine")] == [target["id"]]
+    assert [x["id"] for x in await search("مسبح")] == [target["id"]]
+    # City.
+    assert [x["id"] for x in await search("oran")] == [target["id"]]
+    # Case-insensitive, and a miss is an empty page rather than an error.
+    assert [x["id"] for x in await search("VILLA")] == [target["id"]]
+    assert await search("nothing-matches-this") == []
+
+
+async def test_portal_search_total_matches_the_filtered_page(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """`totalEstimate` must respect `q` — a count that ignored it would tell an
+    agent "3 results" over a 1-row page."""
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    await make_listing(client, admin, title={"fr": "Villa unique"})
+    await make_listing(client, admin, title={"fr": "Studio A"})
+    await make_listing(client, admin, title={"fr": "Studio B"})
+
+    resp = await client.get("/api/v1/portal/listings", params={"q": "villa"}, headers=admin)
+    body = resp.json()
+    assert len(body["items"]) == 1
+    assert body["totalEstimate"] == 1
+
+    unfiltered = await client.get("/api/v1/portal/listings", headers=admin)
+    assert unfiltered.json()["totalEstimate"] == 3
+
+
+async def test_portal_sort_orders_and_pins_the_cursor(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """Sorts order correctly in both directions, and a cursor only orders the
+    sort it was minted under (mirrors the public search's stance)."""
+    _, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    cheap = await make_listing(client, admin, price="1000000.00", title={"fr": "Cheap"})
+    mid = await make_listing(client, admin, price="5000000.00", title={"fr": "Mid"})
+    dear = await make_listing(client, admin, price="9000000.00", title={"fr": "Dear"})
+
+    async def ids(**params: Any) -> list[str]:
+        resp = await client.get("/api/v1/portal/listings", params=params, headers=admin)
+        assert resp.status_code == 200, resp.text
+        return [x["id"] for x in resp.json()["items"]]
+
+    assert await ids(sort="price_asc") == [cheap["id"], mid["id"], dear["id"]]
+    assert await ids(sort="price_desc") == [dear["id"], mid["id"], cheap["id"]]
+    # newest = created_at DESC, so the last one created leads.
+    assert await ids(sort="newest") == [dear["id"], mid["id"], cheap["id"]]
+
+    # An ascending keyset must page forward, not repeat the first row.
+    page_one = await client.get(
+        "/api/v1/portal/listings", params={"sort": "price_asc", "limit": 2}, headers=admin
+    )
+    body = page_one.json()
+    assert [x["id"] for x in body["items"]] == [cheap["id"], mid["id"]]
+    page_two = await client.get(
+        "/api/v1/portal/listings",
+        params={"sort": "price_asc", "limit": 2, "cursor": body["nextCursor"]},
+        headers=admin,
+    )
+    assert [x["id"] for x in page_two.json()["items"]] == [dear["id"]]
+
+    # Replaying that cursor under a different sort is a clean 400, never a
+    # silently mis-ordered page.
+    mismatched = await client.get(
+        "/api/v1/portal/listings",
+        params={"sort": "price_desc", "cursor": body["nextCursor"]},
+        headers=admin,
+    )
+    assert mismatched.status_code == 400
+
+    # Unknown sort values are rejected by the enum, not silently ignored.
+    bad = await client.get("/api/v1/portal/listings", params={"sort": "bogus"}, headers=admin)
+    assert bad.status_code == 422
+
+
+async def test_portal_search_respects_ownership_scope(
+    client: AsyncClient,
+    platform_headers: dict[str, str],
+    create_tenant_user: CreateTenantUser,
+) -> None:
+    """Search must not become a way around visibility scoping: an agent
+    searching a term that matches a colleague's listing finds nothing."""
+    tenant, admin = await tenant_and_login(client, platform_headers, create_tenant_user, Role.ADMIN)
+    agent = await add_user(
+        client, create_tenant_user, str(tenant["id"]), Role.AGENT, email="scoped@a.example.com"
+    )
+    admins_listing = await make_listing(client, admin, title={"fr": "Villa confidentielle"})
+
+    resp = await client.get(
+        "/api/v1/portal/listings", params={"q": "confidentielle"}, headers=agent
+    )
+    assert resp.status_code == 200
+    assert resp.json()["items"] == []
+    assert resp.json()["totalEstimate"] == 0
+
+    # The admin who owns it still finds it.
+    owner = await client.get(
+        "/api/v1/portal/listings", params={"q": "confidentielle"}, headers=admin
+    )
+    assert [x["id"] for x in owner.json()["items"]] == [admins_listing["id"]]
