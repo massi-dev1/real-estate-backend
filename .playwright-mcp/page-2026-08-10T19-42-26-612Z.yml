@@ -1,0 +1,20 @@
+- generic [active] [ref=f7e1]:
+  - button "Open Next.js Dev Tools" [ref=f7e9] [cursor=pointer]
+  - alert [ref=f7e13]: Sofiane Meziane
+  - main [ref=f7e28]:
+    - heading "Sofiane Meziane" [level=1] [ref=f7e29]
+    - paragraph [ref=f7e30]: Connecté en tant que agent.
+    - generic [ref=f7e31]:
+      - generic [ref=f7e32]:
+        - term [ref=f7e33]: E-mail
+        - definition [ref=f7e34]: agent@demo.example
+      - generic [ref=f7e35]:
+        - term [ref=f7e36]: Rôle
+        - definition [ref=f7e37]: agent
+      - generic [ref=f7e38]:
+        - term [ref=f7e39]: Langue
+        - definition [ref=f7e40]: fr
+      - generic [ref=f7e41]:
+        - term [ref=f7e42]: Statut
+        - definition [ref=f7e43]: active
+    - button "Se déconnecter" [ref=f7e45]

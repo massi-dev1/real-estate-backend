@@ -1,0 +1,25 @@
+- generic [active] [ref=f9e1]:
+  - main [ref=f9e2]:
+    - heading "Demo Immobilier" [level=1] [ref=f9e3]
+    - generic [ref=f9e4]:
+      - paragraph [ref=f9e5]: Espace de gestion pour les équipes de l’agence.
+      - link "Se connecter" [ref=f9e7] [cursor=pointer]:
+        - /url: /login
+      - generic [ref=f9e8]:
+        - generic [ref=f9e9]:
+          - term [ref=f9e10]: Biens
+          - definition [ref=f9e11]:
+            - text: "12"
+            - generic [ref=f9e12]: / 1000
+        - generic [ref=f9e13]:
+          - term [ref=f9e14]: Agents
+          - definition [ref=f9e15]:
+            - text: "3"
+            - generic [ref=f9e16]: / 50
+        - generic [ref=f9e17]:
+          - term [ref=f9e18]: Formule
+          - definition [ref=f9e19]: growth
+        - generic [ref=f9e20]:
+          - term [ref=f9e21]: Domaine
+          - definition [ref=f9e22]: demo
+  - button "Open Next.js Dev Tools" [ref=f9e28] [cursor=pointer]
