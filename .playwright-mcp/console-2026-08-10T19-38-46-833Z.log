@@ -1,5 +1,0 @@
-[    4675ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://demo.localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
-[    4976ms] [LOG] [HMR] connected @ http://demo.localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
-[    5839ms] [ERROR] Failed to load resource: the server responded with a status of 401 (Unauthorized) @ http://demo.localhost:3000/api/v1/auth/refresh:0
-[   28976ms] [LOG] [Fast Refresh] rebuilding @ http://demo.localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
-[   29827ms] [LOG] [Fast Refresh] done in 973ms @ http://demo.localhost:3000/_next/static/chunks/node_modules_next_dist_1e8vcs8._.js:776
